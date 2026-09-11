@@ -70,10 +70,11 @@ def test_settings_are_cached(settings_env: None) -> None:
 
 
 def test_no_future_milestone_settings_exist() -> None:
-    """Telephony and messaging configuration belong to later milestones.
+    """Messaging, cost and evaluation configuration belong to later milestones.
 
-    The model settings arrived with milestone 4 and the speech providers with
-    milestone 5. Telephony, SMS and email still have nothing to configure.
+    The model settings arrived with milestone 4, the speech providers with
+    milestone 5 and the carrier with milestone 6. Nothing yet configures SMS,
+    email, cost accounting or the evaluation suite.
     """
     fields = set(Settings.model_fields)
 
@@ -82,9 +83,43 @@ def test_no_future_milestone_settings_exist() -> None:
         for field in fields
         if any(
             token in field
-            for token in ("twilio", "calendar", "sms", "email", "webhook")
+            for token in ("calendar", "sms", "email", "cost", "eval", "outbound")
         )
     }
+
+
+def test_the_telephony_settings_have_safe_defaults() -> None:
+    """Nothing telephonic is reachable until somebody turns it on."""
+    settings = Settings(_env_file=None)
+
+    assert settings.telephony_enabled is False
+    assert settings.validate_twilio_signature is True
+    assert settings.twilio_account_sid == ""
+    assert settings.twilio_auth_token == ""
+    assert settings.twilio_phone_number == ""
+    assert settings.public_base_url == ""
+
+
+def test_the_utterance_boundary_has_the_approved_defaults() -> None:
+    """Temporary milestone-6 mechanics; the real-time milestone replaces them."""
+    settings = Settings(_env_file=None)
+
+    assert settings.telephony_silence_ms == 800
+    assert settings.telephony_silence_threshold == 500
+    assert settings.telephony_max_utterance_ms == 30_000
+
+
+@pytest.mark.parametrize(
+    "field", ["telephony_silence_ms", "telephony_max_utterance_ms"]
+)
+def test_an_utterance_boundary_that_cannot_work_is_refused(field: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: 0})
+
+
+def test_a_negative_silence_threshold_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, telephony_silence_threshold=-1)
 
 
 def test_the_speech_settings_have_safe_defaults() -> None:

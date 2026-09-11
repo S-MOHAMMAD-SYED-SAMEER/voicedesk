@@ -379,3 +379,94 @@ def voice(session, call, calendar_settings):
         )
 
     return build
+
+
+# --- telephony fixtures ---------------------------------------------------
+
+TWILIO_STREAM_SID = "MZ00000000000000000000000000000001"
+TWILIO_CALL_SID = "CA00000000000000000000000000000001"
+TWILIO_AUTH_TOKEN = "test-auth-token"
+
+
+def mulaw_frame(level: int = 0, duration_ms: int = 20) -> bytes:
+    """One carrier frame of µ-law at a given loudness.
+
+    `level` is a 16-bit PCM amplitude; 0 is silence and anything comfortably
+    above the configured threshold counts as somebody speaking.
+    """
+    import struct
+
+    from app.audio.telephony import mulaw_encode
+
+    samples = int(8000 * duration_ms / 1000)
+    pcm = struct.pack(
+        f"<{samples}h", *[level if index % 2 else -level for index in range(samples)]
+    )
+    return mulaw_encode(pcm)
+
+
+def twilio_frame(event: str, **body) -> str:
+    """One Twilio Media Stream control frame, as JSON text."""
+    import json
+
+    return json.dumps({"event": event, **body})
+
+
+def start_frame(
+    call_sid: str = TWILIO_CALL_SID,
+    stream_sid: str = TWILIO_STREAM_SID,
+    **media_format,
+) -> str:
+    fields = {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1}
+    fields.update(media_format)
+    return twilio_frame(
+        "start",
+        streamSid=stream_sid,
+        start={
+            "callSid": call_sid,
+            "accountSid": "AC1",
+            "tracks": ["inbound"],
+            "mediaFormat": fields,
+        },
+    )
+
+
+def media_text_frame(
+    audio: bytes, stream_sid: str = TWILIO_STREAM_SID, track: str = "inbound"
+) -> str:
+    import base64
+
+    return twilio_frame(
+        "media",
+        streamSid=stream_sid,
+        media={"track": track, "payload": base64.b64encode(audio).decode()},
+    )
+
+
+@pytest.fixture
+def telephony_settings(calendar_settings):
+    """Telephony switched on, signature checking off, offline providers."""
+    return calendar_settings.model_copy(
+        update={
+            "telephony_enabled": True,
+            "validate_twilio_signature": False,
+            "twilio_auth_token": TWILIO_AUTH_TOKEN,
+            "public_base_url": "https://voicedesk.example.com",
+        }
+    )
+
+
+@pytest.fixture
+def twilio_call(session):
+    """A `Call` row of the kind the signed webhook creates."""
+    from app.models import Call, CallDirection
+
+    call = Call(
+        direction=CallDirection.INBOUND,
+        from_number="+447700900123",
+        to_number="+441234567890",
+        provider_call_sid=TWILIO_CALL_SID,
+    )
+    session.add(call)
+    session.commit()
+    return call

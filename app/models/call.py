@@ -87,6 +87,17 @@ class Call(Base):
     from_number: Mapped[str] = mapped_column(String(32))
     to_number: Mapped[str] = mapped_column(String(32))
 
+    # The carrier's own identifier for this call, when there was a carrier.
+    # Null for a browser-harness call, which has no carrier at all. Unique
+    # because it is the only durable link between this row and the carrier's
+    # record of the same call — which is what a billing question, a recording
+    # or a support ticket is keyed by — and because the database refusing a
+    # second row for one identifier is better protection against a replayed
+    # webhook than application code remembering to check.
+    provider_call_sid: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )

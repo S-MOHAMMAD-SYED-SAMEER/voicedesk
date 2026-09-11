@@ -126,7 +126,7 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 to 5 are implemented. Milestones 6–10 are not started.** Everything
+**Milestones 1 to 6 are implemented. Milestones 7–10 are not started.** Everything
 above this line is the specification; everything below describes only what
 exists today.
 
@@ -545,26 +545,184 @@ dropping the socket, which would look like a bug in the browser.
   something safe; this layer does not add a second apology or a different
   outcome.
 
+### What milestone 6 built
+
+The telephony adapter, beside the browser one rather than instead of it:
+
+```
+caller ── PSTN ──► carrier
+                     │
+                     ├─ POST /telephony/voice ─► signature ─► Call row ─► TwiML
+                     │
+                     └─ WS /telephony/stream
+                              │  connected / start / media / stop
+                              ▼
+                     µ-law 8 kHz ──► app/audio/telephony.py ──► WAV 16 kHz
+                              │
+                              ▼
+                     VoiceSession ─► Conversation ─► tools ─► calendar ─► PG
+                              │
+                     WAV 16 kHz ──► app/audio/telephony.py ──► µ-law frames
+                              ▼
+                           carrier ──► caller
+```
+
+```
+browser adapter   (app/api/harness.py)      ──┐
+                                              ├──► VoiceSession ──► Conversation
+telephony adapter (app/telephony/stream.py) ──┘
+```
+
+**There is no second dialogue.** `VoiceSession.speak(Audio)` is the same call
+the browser harness makes; only the audio at either end differs. Nothing in
+`app/telephony/` imports the calendar, a tool, or a model implementation, and
+a source-parsing test enforces each of those. No interface anywhere in
+milestones 1 to 5 changed.
+
+**No carrier SDK.** Three things are needed from the carrier and all three are
+standard library: read its JSON (`json`), answer with TwiML (a string), and
+check its signature (`hmac`, `hashlib`, `base64`). Nothing was added to
+`pyproject.toml` at all.
+
+### Telephone audio
+
+Telephony is G.711 µ-law: 8 kHz, mono, one byte a sample. Inside VoiceDesk
+everything is 16 kHz mono 16-bit PCM in a WAV container. `app/audio/telephony.py`
+is the whole of the conversion, and it knows nothing about who is carrying the
+audio.
+
+**The codec is written, not imported.** Python 3.13 removed `audioop`
+(PEP 594), and a backport, NumPy or ffmpeg would all be out of proportion to a
+256-value codec. It is checked against the standard's anchors: silence encodes
+to `0xFF`, `0xFF` decodes to zero, and the extremes clip to `0x80` and `0x00`.
+One detail worth knowing rather than discovering: **255 of 256 byte values
+survive a decode-then-encode round trip, not 256.** `0x7F` is *negative* zero;
+it decodes to zero, which re-encodes to the positive-zero code `0xFF`. That is
+the standard having two codes for zero, not a defect, and the test says so
+explicitly rather than demanding a round trip that cannot exist.
+
+**The resampler is deliberately simple, and makes nothing sound better.**
+Upsampling interpolates between neighbours; downsampling averages pairs. That
+is a crude anti-alias filter, and telephone audio is band-limited to about
+3.4 kHz whatever is done to it — going to 16 kHz invents no detail that 8 kHz
+did not carry. **No claim is made that this improves transcription.**
+
+Outbound audio is cut into 160-byte frames, which is 20 ms at 8 kHz, and a
+`mark` follows each batch so the carrier can say when it finished playing.
+Frames are not paced: pacing so playback can be interrupted is barge-in.
+
+### The temporary utterance boundary
+
+A carrier streams continuously; the dialogue layer wants complete utterances.
+The boundary used here is an amplitude timer — buffer once something is above
+`telephony_silence_threshold`, close the utterance after `telephony_silence_ms`
+below it, and close it anyway at `telephony_max_utterance_ms`, which is also
+what bounds the buffer on an open socket.
+
+**This is not voice-activity detection.** There is no spectral analysis, no
+adaptive noise floor, no speech classifier, no endpoint classifier, no partial
+transcripts and no barge-in. It is the least mechanism that turns a continuous
+stream into turns, it is temporary, and **the milestone that owns real-time
+behaviour replaces it entirely.** A caller who says nothing produces no
+utterance and no model call at all.
+
+### Running a real phone line
+
+```bash
+export VOICEDESK_TELEPHONY_ENABLED=true
+export VOICEDESK_TWILIO_AUTH_TOKEN=...        # also the signature key
+export VOICEDESK_PUBLIC_BASE_URL=https://your-tunnel.example.com
+```
+
+Then point the number's voice webhook at `POST {public_base_url}/telephony/voice`.
+The public URL is required and cannot be inferred: it is both the address in
+the TwiML stream URL and the address the signature is checked against, and
+behind a proxy the request describes the hop rather than the address the
+carrier dialled. While developing, an ngrok or Cloudflare tunnel is enough.
+
+With `telephony_enabled` false — the default — `POST /telephony/voice` answers
+404 and the media socket closes immediately. Nothing telephonic is reachable
+until somebody turns it on.
+
+**Security.** The webhook signature is checked before anything is written, so
+an unsigned request creates no row and costs nothing. The media socket is not
+signed by the carrier, so it authenticates by binding to a call the *signed*
+webhook created: a stream naming a call nobody answered is refused and closed,
+and no row is invented for it. Replay windows, rate limiting and IP
+allow-listing are production hardening and are not implemented.
+
+### What has and has not actually been proved
+
+The automated tests and the simulated smoke test drive a **real** WebSocket
+against a **real** application and a **real** PostgreSQL database, with
+scripted model and speech providers. They exercise the webhook, the signature,
+the µ-law conversion, the utterance boundary, the dialogue path and the call
+lifecycle.
+
+**They do not place a telephone call.** No Twilio account, no phone number and
+no PSTN traffic has been involved at any point. Nothing here establishes real
+carrier behaviour, real latency, real transcription accuracy on telephone
+audio, real voice quality, or production readiness, and no such claim is made
+anywhere in this repository.
+
+### Decisions recorded in milestone 6
+
+* **One migration, the first since milestone 1.** `calls.provider_call_sid`,
+  `String(64)`, nullable and unique. It is the only durable link between a
+  VoiceDesk row and the carrier's record of the same call — what a billing
+  question or a support ticket is keyed by — and the unique constraint is what
+  makes a retried webhook safe, better than application code remembering to
+  look first. Nullable because a browser call has no carrier; verified safe to
+  apply to a table that already has rows.
+* **The browser sentinels are unchanged.** `from_number="browser"` /
+  `to_number="harness"` with a null `provider_call_sid`. Two adapters write
+  `calls`, and neither touches the other's rows.
+* **The webhook creates the call; the socket finds it.** The stream looks the
+  call up by `provider_call_sid` rather than keeping an in-memory map, which
+  also means the webhook and the socket need not land on the same worker.
+* **`calls.outcome` and `total_cost_usd` stay null**, and so do
+  `turns.audio_ms`, `stt_latency_ms` and `tts_latency_ms`. Summarising a call
+  and accounting for it belong to the milestone that owns post-call reporting;
+  durable latency belongs to the one that owns observability.
+* **The greeting is not a turn.** Synthesised through the configured provider
+  after `start`, played down the line, and recorded nowhere: no model call, no
+  `turns` row, no `tool_calls` row. Deliberately not the carrier's `<Say>`,
+  which would put a second unrelated voice on the line.
+* **The dialogue runs on a worker thread.** `VoiceSession.speak` is
+  synchronous all the way down — speech recognition, the model, tool calls,
+  PostgreSQL, synthesis — and running it inline would block the event loop for
+  seconds while the carrier kept sending. `anyio.to_thread.run_sync` keeps the
+  socket responsive without making anything in milestones 4 or 5 async.
+* **One malformed frame never ends a call.** Unparsable JSON, a missing field,
+  a payload that is not base64, an event this milestone has never heard of —
+  each is logged and stepped over. A carrier is entitled to add an event, and
+  hanging up on the caller over it would be the worse bug. What *is* refused
+  is audio in a format that would only decode to noise, and a stream naming an
+  unknown call.
+* **Our own voice is never transcribed.** Only the inbound track is buffered;
+  feeding the outbound track back to speech recognition would be a loop.
+
 ### Deliberately not built yet
 
-No Twilio, media streams, phone numbers, PSTN, actual transfer, SMS, email,
-streaming speech, voice-activity detection, barge-in, latency instrumentation,
-cost computation, scenario evals or deployment. The `app/telephony/` package
-from the layout above **does not exist** — it will be created by the milestone
-that needs it, rather than standing empty.
+No outbound calling, SMS, email, actual transfer, streaming speech,
+voice-activity detection, barge-in, latency instrumentation, cost computation,
+scenario evals or deployment.
 
-**No external service has ever been called from this code.** Every test
-injects a scripted model and scripted speech providers, so the Anthropic,
-Deepgram and ElevenLabs request shapes are verified and their behaviour is
-not. No accuracy, latency or cost number is claimed for any of the three; that
-starts with the milestone-9 scenario evals.
+**No external service has ever been called from this code, and no telephone
+call has ever been placed.** Every test injects a scripted model and scripted
+speech providers, and the telephony tests simulate the carrier over a real
+socket. The Anthropic, Deepgram, ElevenLabs and Twilio request shapes are
+verified; none of their behaviour is. No accuracy, latency, quality or cost
+number is claimed for any of them; that starts with the milestone-9 scenario
+evals.
 
-`transfer_to_human` records the intent to escalate and the reason. Connecting
-a call is telephony's job and belongs to milestone 6.
+`transfer_to_human` records the intent to escalate and the reason. Actually
+connecting the caller to a person is not implemented.
 
 There is **no dialogue API and no booking API**: the calendar core, the tool
-layer and the dialogue layer are libraries. The HTTP surface is `GET /health`
-and `GET /harness`, plus the `WS /ws/harness` socket the harness page uses.
+layer and the dialogue layer are libraries. The HTTP surface is `GET /health`,
+`GET /harness` and `POST /telephony/voice`, plus two sockets — `WS /ws/harness`
+and `WS /telephony/stream`.
 
 `AppointmentStatus` has two values, `booked` and `cancelled`: `reschedule`
 moves an existing booking's times and leaves it `booked`, so it is not a third
@@ -613,7 +771,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (212 pass, 285 skip). With a database: 497 pass.
+one (342 pass, 330 skip). With a database: 672 pass.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing

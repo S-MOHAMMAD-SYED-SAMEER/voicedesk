@@ -4,9 +4,9 @@ All settings come from the environment (or a local `.env`), never from
 module-level constants scattered through the code. See `.env.example`.
 
 Milestone 1 needs the application's identity and its database; milestone 4
-adds the dialogue model and milestone 5 the speech providers. Telephony
-configuration belongs to the milestone that introduces it and is deliberately
-absent.
+adds the dialogue model, milestone 5 the speech providers and milestone 6 the
+telephony carrier. Messaging configuration belongs to the milestone that
+introduces it and is deliberately absent.
 """
 
 from functools import lru_cache
@@ -90,6 +90,34 @@ class Settings(BaseSettings):
     # malformed or hostile frame costs nothing.
     max_utterance_bytes: int = Field(default=1_048_576, gt=0)
     speech_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    # --- Telephony ---
+    # Off, and every credential blank. Nothing telephonic is reachable until
+    # somebody deliberately turns it on, and a fresh clone still runs the
+    # browser harness and the whole test suite without an account anywhere.
+    telephony_enabled: bool = False
+    twilio_account_sid: str = ""
+    # Also the key the webhook signature is checked against. A secret: never
+    # logged, never echoed in an error.
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
+    # The address the carrier dials back for the media stream. It cannot be
+    # derived from the request: behind a proxy the request describes the hop,
+    # not the address reachable from the internet.
+    public_base_url: str = ""
+    # Off only for replaying captured requests locally. An unsigned webhook is
+    # an open door to this database and this account's model budget.
+    validate_twilio_signature: bool = True
+
+    # --- The milestone-6 utterance boundary ---
+    # Telephony streams continuously; the dialogue layer wants complete
+    # utterances. This is an amplitude timer and nothing more: no spectral
+    # analysis, no adaptive noise floor, no speech classifier. It is the
+    # minimum mechanics without which a phone call cannot produce a turn, and
+    # the milestone that owns real-time behaviour replaces it entirely.
+    telephony_silence_ms: int = Field(default=800, gt=0)
+    telephony_silence_threshold: int = Field(default=500, ge=0)
+    telephony_max_utterance_ms: int = Field(default=30_000, gt=0)
 
     @field_validator("stt_provider")
     @classmethod
