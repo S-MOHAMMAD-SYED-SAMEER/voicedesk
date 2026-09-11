@@ -263,3 +263,119 @@ def dialogue(session, call, calendar_settings):
         )
 
     return build
+
+
+# --- audio fixtures -------------------------------------------------------
+
+
+def wav_bytes(
+    duration_ms: int = 500,
+    *,
+    sample_rate: int = 16000,
+    channels: int = 1,
+    sample_width: int = 2,
+) -> bytes:
+    """A silent WAV, deterministic and as wrong as a test asks it to be."""
+    import io
+    import wave
+
+    frames = round(sample_rate * duration_ms / 1000)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        writer.setnchannels(channels)
+        writer.setsampwidth(sample_width)
+        writer.setframerate(sample_rate)
+        writer.writeframes(b"\x00" * frames * channels * sample_width)
+    return buffer.getvalue()
+
+
+class FakeSTT:
+    """A transcriber that answers from a script, with no network.
+
+    Records the audio it was handed so a test can assert the audio layer
+    passed the real bytes through rather than something it made up.
+    """
+
+    def __init__(self, *transcripts, raises: Exception | None = None) -> None:
+        from app.providers.stt import Transcript
+
+        self._scripted = [
+            item if isinstance(item, Transcript) else Transcript(text=item)
+            for item in (transcripts or ["I'd like to book an appointment"])
+        ]
+        self._raises = raises
+        self.calls: list = []
+
+    def transcribe(self, audio):
+        self.calls.append(audio)
+        if self._raises is not None:
+            raise self._raises
+        index = min(len(self.calls) - 1, len(self._scripted) - 1)
+        return self._scripted[index]
+
+
+class FakeTTS:
+    """A synthesiser that returns fixed bytes, with no network."""
+
+    def __init__(self, raises: Exception | None = None, sample_rate: int = 16000):
+        from app.providers.speech import PCM_S16LE, AudioFormat
+
+        self._format = AudioFormat(PCM_S16LE, sample_rate, 1, "wav")
+        self._raises = raises
+        self.calls: list[str] = []
+
+    @property
+    def format(self):
+        return self._format
+
+    def synthesize(self, text: str, voice: str | None = None):
+        from app.providers.tts import Speech
+
+        self.calls.append(text)
+        if self._raises is not None:
+            raise self._raises
+        return Speech(
+            audio=wav_bytes(200),
+            format=self._format,
+            duration_ms=200,
+            voice=voice or "fake",
+            latency_ms=1,
+            provider_name="fake",
+            characters=len(text),
+        )
+
+
+@pytest.fixture
+def utterance():
+    """One valid milestone-5 utterance."""
+    from app.providers.speech import PCM_S16LE, Audio, AudioFormat
+
+    data = wav_bytes(500)
+    return Audio(
+        data=data,
+        format=AudioFormat(PCM_S16LE, 16000, 1, "wav"),
+        duration_ms=500,
+    )
+
+
+@pytest.fixture
+def voice(session, call, calendar_settings):
+    """Build a `VoiceSession` over a scripted model, STT and TTS."""
+    from app.audio import VoiceSession
+    from app.dialogue import Conversation
+
+    def build(*responses, stt=None, tts=None, model=None, raises=None, settings=None):
+        resolved = settings or calendar_settings
+        return VoiceSession(
+            conversation=Conversation(
+                session,
+                call,
+                model or FakeModel(*responses, raises=raises),
+                resolved,
+            ),
+            stt=stt or FakeSTT(),
+            tts=tts or FakeTTS(),
+            settings=resolved,
+        )
+
+    return build

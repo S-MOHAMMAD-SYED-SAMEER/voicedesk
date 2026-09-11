@@ -148,8 +148,16 @@ def test_the_executor_dispatches_through_get_tool() -> None:
 # --- no audio, no telephony ------------------------------------------------
 
 
-def test_nothing_in_milestone_four_imports_audio_or_telephony() -> None:
-    for module in _modules(DIALOGUE) + _modules(PROVIDERS):
+def test_nothing_in_the_dialogue_layer_imports_audio_or_telephony() -> None:
+    """The dialogue layer is text in, text out, and stays that way.
+
+    Scoped to `app/dialogue/` on purpose. `app/providers/` is where audio
+    *implementations* live from milestone 5 onwards, so scanning it for the
+    word `wave` would forbid the speech providers by name rather than test a
+    boundary. The vendor and layering rules for those modules are enforced in
+    `test_audio_isolation.py`.
+    """
+    for module in _modules(DIALOGUE):
         assert not _roots(module.read_text()) & TELEPHONY_AND_AUDIO, module.name
 
 

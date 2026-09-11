@@ -70,10 +70,10 @@ def test_settings_are_cached(settings_env: None) -> None:
 
 
 def test_no_future_milestone_settings_exist() -> None:
-    """Telephony and speech configuration belong to later milestones.
+    """Telephony and messaging configuration belong to later milestones.
 
-    The model settings arrived with milestone 4, which is what the dialogue
-    layer needs; audio and telephony still have nothing to configure.
+    The model settings arrived with milestone 4 and the speech providers with
+    milestone 5. Telephony, SMS and email still have nothing to configure.
     """
     fields = set(Settings.model_fields)
 
@@ -82,9 +82,37 @@ def test_no_future_milestone_settings_exist() -> None:
         for field in fields
         if any(
             token in field
-            for token in ("twilio", "stt", "tts", "calendar", "sms", "email")
+            for token in ("twilio", "calendar", "sms", "email", "webhook")
         )
     }
+
+
+def test_the_speech_settings_have_safe_defaults() -> None:
+    """A fresh clone runs the whole harness with no account anywhere."""
+    settings = Settings(_env_file=None)
+
+    assert settings.stt_provider == "offline"
+    assert settings.tts_provider == "offline"
+    assert settings.deepgram_api_key == ""
+    assert settings.elevenlabs_api_key == ""
+    assert settings.audio_sample_rate == 16000
+    assert settings.max_utterance_bytes == 1_048_576
+    assert settings.speech_timeout_seconds == 10.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("stt_provider", "whisper"), ("tts_provider", "polly")],
+)
+def test_an_unknown_speech_provider_is_refused(field: str, value: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: value})
+
+
+@pytest.mark.parametrize("field", ["audio_sample_rate", "max_utterance_bytes"])
+def test_an_audio_setting_that_cannot_work_is_refused(field: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: 0})
 
 
 def test_the_dialogue_settings_have_safe_defaults() -> None:

@@ -1,0 +1,205 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>VoiceDesk harness</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 24px;
+         max-width: 44rem; }
+  h1 { font-size: 1.1rem; margin: 0 0 .25rem; }
+  p.sub { margin: 0 0 1.25rem; opacity: .7; }
+  #status { display: inline-block; padding: .15rem .5rem; border-radius: .25rem;
+            background: #8883; font-size: .85rem; }
+  button { font: inherit; padding: .6rem 1.1rem; border-radius: .4rem;
+           border: 1px solid #8886; background: #8881; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #talk[data-recording="yes"] { background: #d9534f; color: #fff;
+                                border-color: #d9534f; }
+  .row { display: flex; gap: .5rem; align-items: center; margin: 1rem 0; }
+  #log { margin-top: 1rem; }
+  .turn { border-top: 1px solid #8883; padding: .6rem 0; }
+  .who { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em;
+         opacity: .6; }
+  .fail { color: #d9534f; }
+  .meta { font-size: .8rem; opacity: .6; }
+</style>
+
+<h1>VoiceDesk harness</h1>
+<p class="sub">
+  Press and hold to talk, release to send. One complete utterance per turn —
+  this is not streaming, and no latency target is claimed.
+</p>
+
+<div class="row">
+  <span id="status">disconnected</span>
+  <span class="meta" id="callid"></span>
+</div>
+
+<div class="row">
+  <button id="connect">Connect</button>
+  <button id="talk" disabled>Hold to talk</button>
+  <button id="hangup" disabled>Hang up</button>
+</div>
+
+<div id="log"></div>
+
+<script>
+const SAMPLE_RATE = 16000;
+const els = {
+  status: document.getElementById('status'),
+  callid: document.getElementById('callid'),
+  connect: document.getElementById('connect'),
+  talk: document.getElementById('talk'),
+  hangup: document.getElementById('hangup'),
+  log: document.getElementById('log'),
+};
+
+let socket = null, audioContext = null, stream = null, node = null;
+let chunks = [], recording = false, pendingTurn = null;
+
+function setStatus(text) { els.status.textContent = text; }
+
+function add(who, text, extra = '', failed = false) {
+  const box = document.createElement('div');
+  box.className = 'turn';
+  const label = document.createElement('div');
+  label.className = 'who' + (failed ? ' fail' : '');
+  label.textContent = who;
+  const body = document.createElement('div');
+  body.textContent = text;
+  box.append(label, body);
+  if (extra) {
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = extra;
+    box.append(meta);
+  }
+  els.log.prepend(box);
+}
+
+function play(bytes) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+  const audio = new Audio(url);
+  audio.onended = () => URL.revokeObjectURL(url);
+  audio.play().catch(() => URL.revokeObjectURL(url));
+}
+
+// Float32 samples at whatever the browser captured, down to 16-bit PCM at
+// 16 kHz, then a WAV header. The server accepts nothing else.
+function toWav(float32, inputRate) {
+  const ratio = inputRate / SAMPLE_RATE;
+  const length = Math.floor(float32.length / ratio);
+  const view = new DataView(new ArrayBuffer(44 + length * 2));
+  const put = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  put(0, 'RIFF'); view.setUint32(4, 36 + length * 2, true); put(8, 'WAVE');
+  put(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, SAMPLE_RATE, true);
+  view.setUint32(28, SAMPLE_RATE * 2, true); view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  put(36, 'data'); view.setUint32(40, length * 2, true);
+  for (let i = 0; i < length; i++) {
+    const sample = Math.max(-1, Math.min(1, float32[Math.floor(i * ratio)] || 0));
+    view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return view.buffer;
+}
+
+async function connect() {
+  socket = new WebSocket(`ws://${location.host}/ws/harness`);
+  socket.binaryType = 'arraybuffer';
+
+  socket.onopen = () => setStatus('connected');
+  socket.onclose = () => {
+    setStatus('disconnected');
+    els.connect.disabled = false;
+    els.talk.disabled = els.hangup.disabled = true;
+    stopCapture();
+  };
+  socket.onerror = () => setStatus('socket error');
+
+  socket.onmessage = (event) => {
+    if (typeof event.data !== 'string') {
+      play(event.data);
+      return;
+    }
+    const message = JSON.parse(event.data);
+    if (message.type === 'ready') {
+      els.callid.textContent = `call ${message.call_id}`;
+      els.connect.disabled = true;
+      els.talk.disabled = els.hangup.disabled = false;
+      add('agent', message.greeting, 'greeting — not a transcript turn');
+    } else if (message.type === 'turn') {
+      const confidence = message.confidence == null
+        ? '' : ` · confidence ${message.confidence}`;
+      add('you', message.transcript || '(nothing heard)', confidence);
+      const tools = message.tool_calls
+        .map((t) => `${t.name}${t.success ? '' : ' (failed)'}`).join(', ');
+      const timings = message.timings;
+      add('agent', message.reply,
+          `stt ${timings.stt_ms}ms · llm ${timings.llm_ms}ms · ` +
+          `tts ${timings.tts_ms}ms · total ${timings.total_ms}ms` +
+          (tools ? ` · ${tools}` : '') +
+          (message.failure ? ` · ${message.failure} failed` : ''),
+          message.failed);
+    } else if (message.type === 'error') {
+      add('system', `${message.reason}: ${message.detail}`, '', true);
+    }
+  };
+}
+
+async function startCapture() {
+  if (recording) return;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioContext = new AudioContext();
+  const source = audioContext.createMediaStreamSource(stream);
+  // ScriptProcessor is deprecated but needs no worklet file, no bundler and
+  // no cross-origin isolation. This is a development harness.
+  node = audioContext.createScriptProcessor(4096, 1, 1);
+  chunks = [];
+  node.onaudioprocess = (event) => {
+    chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+  };
+  source.connect(node);
+  node.connect(audioContext.destination);
+  recording = true;
+  els.talk.dataset.recording = 'yes';
+  setStatus('listening');
+}
+
+function stopCapture() {
+  if (node) { node.disconnect(); node.onaudioprocess = null; node = null; }
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  els.talk.dataset.recording = 'no';
+  recording = false;
+}
+
+function sendUtterance() {
+  if (!chunks.length || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const merged = new Float32Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+  socket.send(toWav(merged, audioContext.sampleRate));
+  setStatus('thinking');
+  chunks = [];
+}
+
+els.connect.onclick = connect;
+els.hangup.onclick = () => {
+  if (socket) socket.send(JSON.stringify({ type: 'hangup' }));
+  stopCapture();
+};
+const press = (event) => { event.preventDefault(); startCapture(); };
+const release = (event) => {
+  event.preventDefault();
+  if (!recording) return;
+  stopCapture();
+  if (audioContext) audioContext.close().then(() => {});
+  sendUtterance();
+};
+els.talk.addEventListener('mousedown', press);
+els.talk.addEventListener('touchstart', press);
+window.addEventListener('mouseup', release);
+window.addEventListener('touchend', release);
+</script>

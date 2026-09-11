@@ -126,7 +126,7 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 to 4 are implemented. Milestones 5–10 are not started.** Everything
+**Milestones 1 to 5 are implemented. Milestones 6–10 are not started.** Everything
 above this line is the specification; everything below describes only what
 exists today.
 
@@ -432,26 +432,139 @@ tool calls within one turn is not recoverable from the database alone. The
 transcript and the model's own history carry it; adding a column would be a
 migration, and nothing yet needs one.
 
+### What milestone 5 built
+
+The audio layer, wrapped around the dialogue layer rather than through it:
+
+```
+browser mic → WAV → WS /ws/harness → VoiceSession
+                                          ↓
+                            speech-to-text → Conversation → text-to-speech
+                                          ↓
+                        WS: JSON turn, then the reply as a WAV → speaker
+```
+
+`VoiceSession` (`app/audio/session.py`) validates the audio, transcribes it,
+hands the text to milestone 4, and turns the answer back into sound. It holds
+no conversation state, runs no tools, touches no calendar and never speaks to
+a model — "audio is an adapter, not the product". A source-parsing test
+enforces every one of those.
+
+**It is utterance-based, and the latency target is not claimed.** Press and
+hold to talk, release to send one complete recording; the reply comes back as
+one complete recording. There is no streaming speech-to-text, no streaming
+synthesis, no voice-activity detection, no endpoint detection and no barge-in.
+The specification's 1.2-second target is therefore **neither met nor measured
+in milestone 5** — press-to-talk cannot meet it, and no number in this
+repository suggests otherwise. Streaming and barge-in are milestone 7's, and
+the provider protocols are shaped so that milestone adds a method rather than
+replacing one.
+
+**One audio format, checked at the door.** 16 kHz, mono, signed 16-bit
+little-endian PCM in a WAV container, both directions. Chosen because `wave`
+and `struct` handle it with no dependency at all, because a WAV describes
+itself so nothing has to be told its sample rate out of band, and because it
+is what every transcriber accepts. Anything else — a non-WAV payload, stereo,
+8 kHz, 24-bit, or more than 1 MiB — is rejected before a provider is asked to
+make sense of it. It is not a telephony format: that is 8 kHz µ-law, and
+`AudioFormat.encoding` is a string precisely so milestone 6 can say so.
+(Worth knowing in advance: Python 3.13 removed `audioop`, so that conversion
+will have to be written rather than imported.)
+
+**Offline by default.** `stt_provider` and `tts_provider` default to
+`offline`, so a fresh clone runs the entire harness — microphone, dialogue,
+booking, speaker — with no account, no key, no network and no bill. Be clear
+about what those are: `offline_stt.py` returns **a fixed sentence whatever you
+say**, and `offline_tts.py` returns **a tone, not a voice**. They are a
+harness. Neither is speech recognition and neither is speech.
+
+**Two real adapters, neither ever called for real.** `deepgram_stt.py` and
+`elevenlabs_tts.py` are plain REST over `httpx` — no vendor SDK, and each is
+the only module in the project that knows its vendor's endpoint or header
+names, which a test asserts. Their request shapes are verified against a mock
+transport; **no request has ever left this repository**, so no accuracy,
+latency or cost claim is made about either service. Set a key and switch the
+provider setting to use them.
+
+### The browser harness
+
+`GET /harness` serves one page: vanilla JavaScript, no framework, no npm, no
+build step. It captures microphone audio, converts it to 16-bit PCM at 16 kHz,
+builds a WAV and sends it as one binary frame. It is a development tool, not a
+frontend.
+
+`WS /ws/harness` is the call. A WebSocket rather than a POST because a
+`Conversation` holds its history in memory, so the connection *is* the call:
+opening one starts it, closing one ends it, and nothing needs a session
+registry keyed by an identifier the browser could get wrong.
+
+The server always sends **the JSON turn first and the audio second**, so the
+page never has to guess what a binary frame belongs to. A rejected frame gets
+an `error` message and the call carries on; a frame that fails unexpectedly —
+a provider with no credentials, say — is reported the same way rather than
+dropping the socket, which would look like a bug in the browser.
+
+### Decisions recorded in milestone 5
+
+* **No schema change, and no migration.** Still one migration file, and
+  `alembic check` reports no new operations.
+* **A browser call uses sentinels, not invented numbers.**
+  `calls.from_number = "browser"` and `to_number = "harness"`. Those columns
+  are `NOT NULL` and a browser has neither; a plausible-looking fake number
+  would eventually be read as a real one, and making the columns nullable
+  would be a migration to accommodate a development tool.
+* **`calls.outcome` is deliberately left null.** Summarising how a call went
+  belongs to the milestone that owns post-call reporting. A guess written now
+  would be indistinguishable from a fact later. Milestone 5 manages
+  `started_at` and `ended_at` only, and if the process dies before hanging up,
+  `ended_at` stays null — nobody hung up.
+* **`turns.audio_ms`, `stt_latency_ms` and `tts_latency_ms` stay null.** They
+  are reported on `VoiceTurn` and to the browser, and written nowhere.
+  Milestone 4 commits its turn rows before synthesis runs and does not hand
+  them back, so filling these would mean either changing the dialogue layer or
+  reaching back into rows it had already written. Durable latency belongs to
+  the milestone that owns observability; an empty column is more honest than
+  one filled by a layer that had to go behind another's back.
+* **Confidence is carried and not acted on.** `Transcript.confidence` reaches
+  `VoiceTurn` and the browser. The specification's rule — low confidence twice
+  in a row, offer a callback — needs endpoint detection to mean anything, so
+  it belongs with the milestone that builds that. **Milestone 5 does not
+  implement it**, and says so rather than half-building it.
+* **The greeting is not a turn.** Picking up the phone is synthesised and
+  played, but nobody said anything to prompt it: no model call, no `turns`
+  rows, no `tool_calls` row.
+* **Three failures, three answers.** Nothing heard: the model is *not called
+  at all* — silence is not a question, and asking a model about it invites
+  invention. The transcriber failed: the model is not called and no transcript
+  is fabricated, because a broken provider must never look like silence. The
+  synthesiser failed: the dialogue already happened and is already persisted,
+  including any booking it made, so it is **not re-run** — retrying for audio
+  would risk booking the same caller twice. The reply comes back as text with
+  `speech=None`.
+* **A failed dialogue is spoken verbatim.** Milestone 4 already returns
+  something safe; this layer does not add a second apology or a different
+  outcome.
+
 ### Deliberately not built yet
 
-No audio, STT, TTS, WebSockets, Twilio, phone numbers, actual transfer, SMS,
-email, barge-in, cost computation, scenario evals or deployment. The
-`app/telephony/` and `app/audio/` packages from the layout above **do not
-exist** — they will be created by the milestones that need them, rather than
-standing empty, and `app/providers/` holds `llm.py` only: `stt.py` and `tts.py`
-arrive with audio.
+No Twilio, media streams, phone numbers, PSTN, actual transfer, SMS, email,
+streaming speech, voice-activity detection, barge-in, latency instrumentation,
+cost computation, scenario evals or deployment. The `app/telephony/` package
+from the layout above **does not exist** — it will be created by the milestone
+that needs it, rather than standing empty.
 
-No real model call has ever been made from this code. Every test injects a
-scripted model, so the Anthropic request shape is verified but its behaviour is
-not — that starts with the milestone-9 scenario evals, and no accuracy or cost
-number is claimed until then.
+**No external service has ever been called from this code.** Every test
+injects a scripted model and scripted speech providers, so the Anthropic,
+Deepgram and ElevenLabs request shapes are verified and their behaviour is
+not. No accuracy, latency or cost number is claimed for any of the three; that
+starts with the milestone-9 scenario evals.
 
 `transfer_to_human` records the intent to escalate and the reason. Connecting
 a call is telephony's job and belongs to milestone 6.
 
-There is **no dialogue API**: the calendar core, the tool layer and the
-dialogue layer are libraries the milestone-5 browser harness will call. The
-only HTTP endpoint remains `GET /health`.
+There is **no dialogue API and no booking API**: the calendar core, the tool
+layer and the dialogue layer are libraries. The HTTP surface is `GET /health`
+and `GET /harness`, plus the `WS /ws/harness` socket the harness page uses.
 
 `AppointmentStatus` has two values, `booked` and `cancelled`: `reschedule`
 moves an existing booking's times and leaves it `booked`, so it is not a third
@@ -475,11 +588,32 @@ curl localhost:8000/health
 pytest
 ```
 
+**The browser harness.** With the server running, open
+<http://localhost:8000/harness>, press Connect, then press and hold *Hold to
+talk* and release to send. You will need at least one active row in `services`
+and some `business_hours` for the calendar to have anything to offer.
+
+Out of the box the speech providers are offline, so you can do that with no
+credentials at all — but remember what you are hearing: whatever you say, the
+transcriber returns the same fixed sentence, and the reply is a tone rather
+than a voice. For real speech:
+
+```bash
+export VOICEDESK_STT_PROVIDER=deepgram VOICEDESK_DEEPGRAM_API_KEY=...
+export VOICEDESK_TTS_PROVIDER=elevenlabs VOICEDESK_ELEVENLABS_API_KEY=...
+export VOICEDESK_TTS_VOICE=...            # an ElevenLabs voice id
+```
+
+The dialogue itself needs `VOICEDESK_ANTHROPIC_API_KEY` whichever speech
+providers you use. Without it the harness still connects and plays its
+greeting, and each turn comes back as a `turn_failed` message rather than
+dropping the socket.
+
 Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (110 pass, 242 skip). With a database: 352 pass.
+one (212 pass, 285 skip). With a database: 497 pass.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing

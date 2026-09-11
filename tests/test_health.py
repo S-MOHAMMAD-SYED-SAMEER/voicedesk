@@ -27,8 +27,13 @@ def test_health_needs_no_database(client: TestClient) -> None:
     assert client.get("/health").status_code == 200
 
 
-def test_only_health_is_exposed(client: TestClient) -> None:
-    """Milestone 1 has no telephony, audio, dialogue or booking surface."""
+def test_the_http_surface_is_health_and_the_harness(client: TestClient) -> None:
+    """`/health` from milestone 1, and the milestone-5 development page.
+
+    There is still no booking API, no dialogue API and no telephony webhook:
+    the calendar, the tools and the dialogue layer are libraries, and the only
+    way to reach them over the network is the harness socket.
+    """
     paths = set(client.get("/openapi.json").json()["paths"])
 
-    assert paths == {"/health"}
+    assert paths == {"/health", "/harness"}

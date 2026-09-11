@@ -12,17 +12,22 @@ dependencies = [
     "alembic>=1.14",
     "psycopg[binary]>=3.2",
     "anthropic>=1.5,<2",
+    # The speech adapters are plain REST calls; no vendor SDK is needed for
+    # either of them. Also what the test suite uses to drive the app.
+    "httpx>=0.28",
+    # Uvicorn serves the harness socket through this. Already arrived with
+    # uvicorn[standard]; declared because the application now depends on it.
+    "websockets>=14",
 ]
 
 # Dependencies arrive with the milestone that first imports them, so an
 # install never pulls in a library the code does not yet use.
-#   m5-m6: websockets, twilio
-#   m8:    an SMS or email client
+#   m6: twilio
+#   m8: an SMS or email client
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
-    "httpx>=0.28",
 ]
 
 [build-system]
@@ -31,6 +36,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+# The harness page is read from disk at request time, so it has to travel
+# with the package.
+[tool.setuptools.package-data]
+"app.static" = ["*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

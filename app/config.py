@@ -4,8 +4,9 @@ All settings come from the environment (or a local `.env`), never from
 module-level constants scattered through the code. See `.env.example`.
 
 Milestone 1 needs the application's identity and its database; milestone 4
-adds the dialogue model. Telephony and speech configuration belong to the
-milestones that introduce them and are deliberately absent.
+adds the dialogue model and milestone 5 the speech providers. Telephony
+configuration belongs to the milestone that introduces it and is deliberately
+absent.
 """
 
 from functools import lru_cache
@@ -16,6 +17,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # What `output_config.effort` accepts, shallowest first.
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+# Speech providers that can be selected by name. "offline" needs no
+# credentials and no network, which is why it is the default: a fresh clone
+# runs the whole browser harness without an account anywhere.
+STT_PROVIDERS = ("offline", "deepgram")
+TTS_PROVIDERS = ("offline", "elevenlabs")
 
 
 class Settings(BaseSettings):
@@ -62,6 +69,47 @@ class Settings(BaseSettings):
     # How many times one caller turn may go round the model/tool loop before
     # the dialogue layer stops it. Reaching this is a failure, not an answer.
     max_tool_iterations: int = Field(default=8, gt=0)
+
+    # --- Speech ---
+    # Offline by default and every key blank, so nothing in the repository
+    # implies a credential and `pip install` to a working harness needs no
+    # account. The offline providers are a fixed transcript and a tone; they
+    # are a harness, not speech recognition or a voice.
+    stt_provider: str = "offline"
+    tts_provider: str = "offline"
+    deepgram_api_key: str = ""
+    elevenlabs_api_key: str = ""
+    stt_model: str = "nova-3"
+    tts_voice: str = ""
+    tts_model: str = ""
+    # The one audio format milestone 5 accepts, in Hz. Telephony is 8 kHz
+    # µ-law and arrives with the milestone that needs it.
+    audio_sample_rate: int = Field(default=16000, gt=0)
+    # One utterance. At 16 kHz mono 16-bit this is roughly 32 seconds, which
+    # is far more than a caller says in one breath and small enough that a
+    # malformed or hostile frame costs nothing.
+    max_utterance_bytes: int = Field(default=1_048_576, gt=0)
+    speech_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    @field_validator("stt_provider")
+    @classmethod
+    def _known_stt_provider(cls, value: str) -> str:
+        if value not in STT_PROVIDERS:
+            raise ValueError(
+                f"{value!r} is not a speech-to-text provider; use one of "
+                f"{', '.join(STT_PROVIDERS)}"
+            )
+        return value
+
+    @field_validator("tts_provider")
+    @classmethod
+    def _known_tts_provider(cls, value: str) -> str:
+        if value not in TTS_PROVIDERS:
+            raise ValueError(
+                f"{value!r} is not a text-to-speech provider; use one of "
+                f"{', '.join(TTS_PROVIDERS)}"
+            )
+        return value
 
     @field_validator("dialogue_effort")
     @classmethod
