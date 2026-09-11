@@ -156,3 +156,110 @@ def tools(session, calendar_settings):
     from app.tools import ToolContext
 
     return ToolContext(session=session, settings=calendar_settings)
+
+
+# --- dialogue fixtures ----------------------------------------------------
+
+
+class FakeModel:
+    """A `LanguageModel` that answers from a script, with no network.
+
+    Records what it was asked so a test can assert the dialogue layer handed
+    it the right system prompt, history and tools.
+    """
+
+    model_name = "fake-model-1"
+
+    def __init__(self, *responses, raises: Exception | None = None) -> None:
+        self._responses = list(responses)
+        self._raises = raises
+        self.requests: list[dict] = []
+
+    def respond(self, *, system, messages, tools):
+        self.requests.append(
+            {"system": system, "messages": list(messages), "tools": list(tools)}
+        )
+        if self._raises is not None:
+            raise self._raises
+        if not self._responses:
+            raise AssertionError("FakeModel ran out of scripted responses")
+        return self._responses.pop(0)
+
+    @property
+    def call_count(self) -> int:
+        return len(self.requests)
+
+
+def say(text: str, *, latency_ms: int = 12):
+    """A scripted plain-text response."""
+    from app.providers.llm import ModelResponse
+
+    return ModelResponse(
+        text=text,
+        stop_reason="end_turn",
+        raw_content=[{"type": "text", "text": text}],
+        model_name="fake-model-1",
+        latency_ms=latency_ms,
+    )
+
+
+def use_tools(*calls, text: str = "", latency_ms: int = 12):
+    """A scripted response asking for one or more tools.
+
+    Each call is `(name, arguments)`; ids are generated so they are unique
+    within the response, as the API guarantees.
+    """
+    import uuid as _uuid
+
+    from app.providers.llm import ModelResponse, ToolUse
+
+    uses = [
+        ToolUse(id=f"toolu_{_uuid.uuid4().hex[:12]}", name=name, arguments=arguments)
+        for name, arguments in calls
+    ]
+    content: list[dict] = []
+    if text:
+        content.append({"type": "text", "text": text})
+    content.extend(
+        {"type": "tool_use", "id": use.id, "name": use.name, "input": use.arguments}
+        for use in uses
+    )
+    return ModelResponse(
+        text=text,
+        tool_uses=uses,
+        stop_reason="tool_use",
+        raw_content=content,
+        model_name="fake-model-1",
+        latency_ms=latency_ms,
+    )
+
+
+@pytest.fixture
+def call(session):
+    """A `Call` row for the dialogue layer to record turns against."""
+    from app.models import Call, CallDirection
+
+    row = Call(
+        direction=CallDirection.INBOUND,
+        from_number="+447700900123",
+        to_number="+441234567890",
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
+@pytest.fixture
+def dialogue(session, call, calendar_settings):
+    """Build a `Conversation` on the test database from a scripted model."""
+    from app.dialogue import Conversation
+
+    def build(*responses, raises=None, model=None, settings=None):
+        return Conversation(
+            session,
+            call,
+            model or FakeModel(*responses, raises=raises),
+            settings or calendar_settings,
+        )
+
+    return build

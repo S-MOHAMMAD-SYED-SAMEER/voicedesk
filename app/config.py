@@ -3,9 +3,9 @@
 All settings come from the environment (or a local `.env`), never from
 module-level constants scattered through the code. See `.env.example`.
 
-Milestone 1 needs the application's identity and its database. Telephony,
-speech and model configuration belong to the milestones that introduce them
-and are deliberately absent.
+Milestone 1 needs the application's identity and its database; milestone 4
+adds the dialogue model. Telephony and speech configuration belong to the
+milestones that introduce them and are deliberately absent.
 """
 
 from functools import lru_cache
@@ -13,6 +13,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# What `output_config.effort` accepts, shallowest first.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
 class Settings(BaseSettings):
@@ -42,6 +45,33 @@ class Settings(BaseSettings):
     # The specification does not name a granularity; 15 minutes is the usual
     # booking grid and is deterministic.
     slot_granularity_minutes: int = Field(default=15, gt=0)
+
+    # --- Dialogue ---
+    # Empty by default so nothing in the repository implies a credential. The
+    # SDK falls back to its own environment resolution when this is blank, and
+    # no test ever needs a key: the model is injected.
+    anthropic_api_key: str = ""
+    dialogue_model: str = "claude-opus-5"
+    # A receptionist answers in about two sentences. The ceiling is for a turn
+    # that also carries tool calls.
+    dialogue_max_tokens: int = Field(default=1024, gt=0)
+    # Thinking depth. The specification's latency budget is 1.2 seconds from
+    # the caller stopping to the agent speaking, so the default is the
+    # shallowest setting rather than the API's own default of `high`.
+    dialogue_effort: str = "low"
+    # How many times one caller turn may go round the model/tool loop before
+    # the dialogue layer stops it. Reaching this is a failure, not an answer.
+    max_tool_iterations: int = Field(default=8, gt=0)
+
+    @field_validator("dialogue_effort")
+    @classmethod
+    def _known_effort(cls, value: str) -> str:
+        if value not in EFFORT_LEVELS:
+            raise ValueError(
+                f"{value!r} is not an effort level; use one of "
+                f"{', '.join(EFFORT_LEVELS)}"
+            )
+        return value
 
     @field_validator("business_timezone")
     @classmethod

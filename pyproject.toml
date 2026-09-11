@@ -11,11 +11,11 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alembic>=1.14",
     "psycopg[binary]>=3.2",
+    "anthropic>=1.5,<2",
 ]
 
 # Dependencies arrive with the milestone that first imports them, so an
 # install never pulls in a library the code does not yet use.
-#   m3-m4: anthropic
 #   m5-m6: websockets, twilio
 #   m8:    an SMS or email client
 

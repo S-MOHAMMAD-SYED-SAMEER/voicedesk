@@ -126,7 +126,7 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 and 2 are implemented. Milestones 3–10 are not started.** Everything
+**Milestones 1 to 4 are implemented. Milestones 5–10 are not started.** Everything
 above this line is the specification; everything below describes only what
 exists today.
 
@@ -311,21 +311,147 @@ later:
 No schema change was needed, so there is still exactly one migration:
 `alembic check` reports no new operations.
 
+### What milestone 4 built
+
+The dialogue layer: text in, text out, with tool use in between. No audio, no
+telephony, no HTTP endpoint — `GET /health` is still the only route. A whole
+booking conversation is a unit test.
+
+```
+caller text → Conversation → LanguageModel → tool_use
+                                  ↓
+                           ToolExecutor → app.tools registry
+                                  ↓
+                         CalendarService → PostgreSQL
+                                  ↓
+                          tool_result → LanguageModel → reply
+```
+
+**One module imports the SDK.** `app/providers/llm.py` defines a vendor-neutral
+`LanguageModel` protocol and its dataclasses; `app/providers/anthropic_llm.py`
+is the only file in the project that says `import anthropic`, and it takes an
+injectable client. So the dialogue layer, the tool layer and all 352 tests run
+with no API key and no network — verified by running the suite with the key
+unset and the SDK's base URL pointed at a dead port. A source-parsing test
+enforces the boundary.
+
+**The tools the model sees are generated from the tools that exist.**
+`app/dialogue/definitions.py` builds the six schemas by walking `app.tools.TOOLS`
+and comparing each schema against the real function signature. A tool added to
+the registry without a schema, a schema for a tool that is not registered, or
+an argument that drifts, all raise rather than reach a model as a quiet lie.
+Schemas are strict: closed objects, every argument required. They describe
+argument shapes and nothing about durations, opening hours or availability.
+
+**The prompt asks; the application decides.** Every behaviour rule the
+specification lists is in `app/dialogue/prompt.py`, and every one of them that
+can be enforced in code is *also* enforced in code. The prompt is a constant
+with no timestamps or identifiers, so the same conversation produces the same
+bytes; the only thing read from the database is the list of active service
+names, because a model with no menu has to guess at one.
+
+**The loop always ends.** One caller turn goes round the model/tool loop at
+most `max_tool_iterations` times (default 8). Running out is a failure with a
+fixed reply, not an answer. So is a model that cannot be reached. In both cases
+`DialogueResult.failed` is true, the caller hears something safe, and the
+partial transcript is still written — the call that went wrong is the one
+somebody will want to read.
+
+### The booking guard
+
+The specification's acceptance criterion is a hallucinated-availability rate of
+**zero**. A prompt can ask for that; only code can hold it. So the executor
+keeps an in-memory ledger of the slots the calendar has actually offered during
+this conversation, and:
+
+> `book_appointment` runs only for a start time that a **successful**
+> `check_availability` returned earlier in the same conversation.
+
+Anything else is refused before the tool is reached, returned to the model as a
+structured failure it can recover from, and persisted as a failed call. The
+comparison is on instants rather than strings, so the same moment written with
+a different offset still matches, and service names are compared the way the
+tool layer resolves them. A failed or empty availability check verifies
+nothing, and one conversation's ledger cannot verify another's booking.
+
+Three things the guard deliberately does **not** do:
+
+* It does not decide whether the *caller* agreed. That is a conversation, not a
+  fact, and it stays a behavioural rule tested by the milestone-9 scenarios.
+* It does not stop the model *saying* a wrong time out loud. Only tool calls
+  pass through here.
+* It does not decide whether a verified slot is still free. `CalendarService`
+  and the database's exclusion constraint remain the authority on that, and a
+  race lost between the check and the write comes back as `slot_taken` — there
+  is a test that stages exactly that interleaving.
+
+`reschedule` is not guarded. The calendar already refuses a time outside
+opening hours or one that is taken, and guarding it would mean requiring an
+availability check the caller never asked for.
+
+### Decisions recorded in milestone 4
+
+* **No schema change, and no migration.** `turns` and `tool_calls` already had
+  every column milestone 4 needs. `alembic check` reports no new operations and
+  there is still one migration file.
+* **One caller turn and one agent turn per `send()`**, whatever happened in
+  between. A row per model response would leave empty-text turns behind, and
+  `turns` is what milestone 9's "mean turns to booking" counts.
+  `llm_latency_ms` on the agent turn is the summed model latency for the turn.
+* **Both `created_at` values are set in Python.** PostgreSQL's `now()` is the
+  *transaction's* time, so two rows written together would share it — and
+  `Call.turns` orders by `created_at`.
+* **A failed tool call stores a null result.** M3 failures carry recovery data
+  (`services_offered`, `slot_taken`) and that data *is* returned to the model
+  in the `tool_result` block, because it is how the model recovers. It is not
+  an outcome, so it is not written to `tool_calls.result`.
+* **Conversation history lives in memory, not in the database.** It contains
+  the provider's tool-use and tool-result blocks; `turns` stores text. Making
+  the database round-trip an API transcript would mean columns milestone 4 does
+  not justify. `turns` and `tool_calls` are the readable audit record.
+* **Anthropic's `tool_use` ids are never persisted.** They correlate a request
+  with its response and mean nothing afterwards.
+* **`Conversation` is given a `Call`; it never invents one.** `calls.from_number`
+  and `to_number` are `NOT NULL` and milestone 4 is text-only, so what a
+  browser-harness call puts there is milestone 5's question.
+* **Adaptive thinking, effort `low`.** The budgeted form of extended thinking
+  is removed on current models. Effort is the latency lever, and the
+  specification's budget is 1.2 seconds. Thinking is deliberately left *on*:
+  with it disabled the model can write a tool call into visible text instead of
+  calling the tool, which for a receptionist means silently never booking.
+* **There is no price column, so there are no prices.** The specification says
+  never to state a price unless it is in the services table; the table holds
+  none, so the prompt says plainly that the system has no pricing and routes
+  the question to a message or a human. Adding the column would be a schema
+  change nothing has asked for.
+* **`SYSTEM_PROMPT_VERSION` is a code constant** (`m4.1`), reported on every
+  `DialogueResult` and stored nowhere.
+
+Known limitation: `tool_calls` has no ordering column, so the order of several
+tool calls within one turn is not recoverable from the database alone. The
+transcript and the model's own history carry it; adding a column would be a
+migration, and nothing yet needs one.
+
 ### Deliberately not built yet
 
-No audio, STT, TTS, WebSockets, Twilio, Anthropic calls, dialogue layer,
-transcript persistence, actual transfer, SMS, email, barge-in, cost
-computation, scenario evals or deployment. The `app/telephony/`, `app/audio/`,
-`app/providers/` and `app/dialogue/` packages from the layout above **do not
+No audio, STT, TTS, WebSockets, Twilio, phone numbers, actual transfer, SMS,
+email, barge-in, cost computation, scenario evals or deployment. The
+`app/telephony/` and `app/audio/` packages from the layout above **do not
 exist** — they will be created by the milestones that need them, rather than
-standing empty.
+standing empty, and `app/providers/` holds `llm.py` only: `stt.py` and `tts.py`
+arrive with audio.
 
-Nothing persists a tool call yet: `tool_calls` rows need a `turn_id`, and
-turns arrive with the dialogue layer in milestone 4.
+No real model call has ever been made from this code. Every test injects a
+scripted model, so the Anthropic request shape is verified but its behaviour is
+not — that starts with the milestone-9 scenario evals, and no accuracy or cost
+number is claimed until then.
 
-There is **no booking API**: the calendar core and the tool layer are
-libraries the milestone-4 dialogue layer will call. The only HTTP endpoint
-remains `GET /health`.
+`transfer_to_human` records the intent to escalate and the reason. Connecting
+a call is telephony's job and belongs to milestone 6.
+
+There is **no dialogue API**: the calendar core, the tool layer and the
+dialogue layer are libraries the milestone-5 browser harness will call. The
+only HTTP endpoint remains `GET /health`.
 
 `AppointmentStatus` has two values, `booked` and `cancelled`: `reschedule`
 moves an existing booking's times and leaves it `booked`, so it is not a third
@@ -353,7 +479,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (42 pass, 168 skip). With a database: 210 pass.
+one (110 pass, 242 skip). With a database: 352 pass.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing

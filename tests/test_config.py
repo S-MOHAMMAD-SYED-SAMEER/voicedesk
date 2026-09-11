@@ -1,6 +1,7 @@
 """Environment-driven configuration."""
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import Settings, get_settings
 
@@ -69,7 +70,11 @@ def test_settings_are_cached(settings_env: None) -> None:
 
 
 def test_no_future_milestone_settings_exist() -> None:
-    """Telephony, speech and model configuration belong to later milestones."""
+    """Telephony and speech configuration belong to later milestones.
+
+    The model settings arrived with milestone 4, which is what the dialogue
+    layer needs; audio and telephony still have nothing to configure.
+    """
     fields = set(Settings.model_fields)
 
     assert not {
@@ -77,6 +82,27 @@ def test_no_future_milestone_settings_exist() -> None:
         for field in fields
         if any(
             token in field
-            for token in ("twilio", "anthropic", "stt", "tts", "calendar", "sms")
+            for token in ("twilio", "stt", "tts", "calendar", "sms", "email")
         )
     }
+
+
+def test_the_dialogue_settings_have_safe_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.anthropic_api_key == ""
+    assert settings.dialogue_model == "claude-opus-5"
+    assert settings.dialogue_effort == "low"
+    assert settings.max_tool_iterations == 8
+    assert settings.dialogue_max_tokens == 1024
+
+
+def test_an_unknown_effort_level_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, dialogue_effort="enormous")
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_a_loop_limit_that_cannot_run_is_refused(value: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, max_tool_iterations=value)
