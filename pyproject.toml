@@ -1,0 +1,36 @@
+[project]
+name = "voicedesk"
+version = "0.1.0"
+description = "AI phone receptionist: answers a business line, books appointments, and hands off to a human when it should."
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2",
+]
+
+# Dependencies arrive with the milestone that first imports them, so an
+# install never pulls in a library the code does not yet use.
+#   m3-m4: anthropic
+#   m5-m6: websockets, twilio
+#   m8:    an SMS or email client
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -121,3 +121,92 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 - Double-booking is the failure that ends a client relationship. Enforce it with a database constraint, not application logic alone.
 - Store every transcript. Redact nothing in v1, but keep PII fields in named columns so redaction is easy to add later.
 - Small, reviewable changes. Do not introduce a realtime voice SDK that replaces the provider interfaces without being asked.
+
+---
+
+## Implementation status
+
+**Milestone 1 is implemented. Milestones 2–10 are not started.** Everything
+above this line is the specification; everything below describes only what
+exists today.
+
+### What milestone 1 built
+
+- FastAPI application (`app/main.py`) serving exactly one endpoint, `GET /health`.
+- Environment-driven configuration (`app/config.py`, prefix `VOICEDESK_`) —
+  application identity and the database URL, nothing more.
+- SQLAlchemy 2.x on psycopg 3 (`app/db/`), lazily-created cached engine.
+- All six tables from the data model, as ORM models under `app/models/`:
+  `calls`, `turns`, `tool_calls`, `appointments`, `services`, `business_hours`.
+- One Alembic migration creating them, verified to upgrade, downgrade and
+  re-upgrade on a fresh database.
+- 50 tests, exercising the schema against a real migrated PostgreSQL database
+  rather than in memory.
+
+### The double-booking constraint
+
+The specification says double booking must be prevented "with a database
+constraint, not application logic alone". That constraint exists now, ahead of
+any booking code, because milestone 2 needs it to already be true:
+
+```sql
+EXCLUDE USING gist (
+    staff_id WITH =,
+    tstzrange(starts_at, ends_at, '[)') WITH &&
+) WHERE (status = 'booked')
+```
+
+Two callers can both pass an availability check before either commits; only the
+database can settle that race. Three consequences, each covered by a test:
+
+- **`appointments.staff_id` is denormalised from the service.** An exclusion
+  constraint can only reference its own table's columns, and what must not
+  overlap is one person's diary — a stylist offering two services must not be
+  booked for both at once. Keeping it in step with `services.staff_id` is
+  milestone 2's job.
+- **The range is half-open**, so 09:00–09:30 and 09:30–10:00 do not collide.
+- **The constraint is partial**, so a cancelled appointment stops holding its slot.
+
+It needs the `btree_gist` extension, which the migration installs (trusted
+since PostgreSQL 13, so no superuser is required).
+
+### Deliberately not built yet
+
+No audio, STT, TTS, WebSockets, Twilio, Anthropic calls, tool layer, dialogue
+layer, availability calculation, booking, rescheduling, cancellation, transfer,
+SMS, email, barge-in, cost computation, scenario evals or deployment. The
+`app/telephony/`, `app/audio/`, `app/providers/`, `app/dialogue/`, `app/tools/`
+and `app/calendar/` packages from the layout above **do not exist** — they will
+be created by the milestones that need them, rather than standing empty.
+
+`AppointmentStatus` has two values, `booked` and `cancelled`: `reschedule`
+moves an existing booking's times and leaves it `booked`, so it is not a third
+state. `calls.direction` allows `outbound` because a direction has two values,
+but v1 only ever writes `inbound` — outbound calling is a non-goal.
+
+### Running locally (milestone 1)
+
+```bash
+python3.13 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+
+createuser voicedesk --pwprompt
+createdb -O voicedesk voicedesk
+createdb -O voicedesk voicedesk_test     # the test suite migrates and drops this
+
+alembic upgrade head
+uvicorn app.main:app --reload
+curl localhost:8000/health
+pytest
+```
+
+Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
+`app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
+app cannot disagree about which database they are using. Tests that need
+PostgreSQL are skipped when no server answers, so `pytest` still runs without
+one (16 pass, 34 skip).
+
+VoiceDesk is a separate application from DocIntel in this repository: its own
+package, dependencies, virtualenv, configuration prefix and database. Nothing
+is shared between them.
