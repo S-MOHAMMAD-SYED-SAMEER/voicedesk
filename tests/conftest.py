@@ -96,3 +96,52 @@ def migrated_engine(
 def session(migrated_engine: Engine) -> Iterator[Session]:
     with Session(migrated_engine) as db_session:
         yield db_session
+
+
+# --- calendar fixtures ----------------------------------------------------
+
+WEEKDAYS = range(0, 5)  # Monday to Friday
+
+
+@pytest.fixture
+def calendar_settings():
+    """Deterministic calendar configuration: UTC, on a 15-minute grid."""
+    from app.config import Settings
+
+    return Settings(
+        _env_file=None, business_timezone="UTC", slot_granularity_minutes=15
+    )
+
+
+@pytest.fixture
+def calendar(session, calendar_settings):
+    from app.calendar import CalendarService
+
+    return CalendarService(session, calendar_settings)
+
+
+@pytest.fixture
+def open_weekdays(session):
+    """09:00–17:00, Monday to Friday."""
+    from datetime import time
+
+    from app.models import BusinessHours
+
+    session.add_all(
+        [
+            BusinessHours(weekday=weekday, opens_at=time(9), closes_at=time(17))
+            for weekday in WEEKDAYS
+        ]
+    )
+    session.commit()
+
+
+@pytest.fixture
+def haircut(session):
+    """A 30-minute service performed by staff member "sam"."""
+    from app.models import Service
+
+    service = Service(name="Haircut", duration_minutes=30, staff_id="sam")
+    session.add(service)
+    session.commit()
+    return service

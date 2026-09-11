@@ -9,7 +9,9 @@ and are deliberately absent.
 """
 
 from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +30,27 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+psycopg://voicedesk:voicedesk@localhost:5432/voicedesk"
     )
+
+    # --- Calendar ---
+    # `business_hours` stores wall-clock times and appointments are instants,
+    # so something has to say which wall clock. The specification defines no
+    # timezone and VoiceDesk serves one business (multi-tenancy is a non-goal),
+    # so it is one setting rather than a column. UTC by default; a real
+    # deployment sets its own.
+    business_timezone: str = "UTC"
+    # The grid available start times sit on, measured from each opening time.
+    # The specification does not name a granularity; 15 minutes is the usual
+    # booking grid and is deterministic.
+    slot_granularity_minutes: int = Field(default=15, gt=0)
+
+    @field_validator("business_timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"{value!r} is not a known IANA timezone") from exc
+        return value
 
 
 @lru_cache

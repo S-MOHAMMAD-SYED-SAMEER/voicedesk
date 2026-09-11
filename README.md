@@ -126,7 +126,7 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestone 1 is implemented. Milestones 2–10 are not started.** Everything
+**Milestones 1 and 2 are implemented. Milestones 3–10 are not started.** Everything
 above this line is the specification; everything below describes only what
 exists today.
 
@@ -140,7 +140,7 @@ exists today.
   `calls`, `turns`, `tool_calls`, `appointments`, `services`, `business_hours`.
 - One Alembic migration creating them, verified to upgrade, downgrade and
   re-upgrade on a fresh database.
-- 50 tests, exercising the schema against a real migrated PostgreSQL database
+- Tests exercising the schema against a real migrated PostgreSQL database
   rather than in memory.
 
 ### The double-booking constraint
@@ -170,14 +170,84 @@ database can settle that race. Three consequences, each covered by a test:
 It needs the `btree_gist` extension, which the migration installs (trusted
 since PostgreSQL 13, so no superuser is required).
 
+### What milestone 2 built
+
+The calendar core, in `app/calendar/` — deterministic business logic with no
+AI anywhere near it:
+
+| Module | Responsibility |
+| --- | --- |
+| `hours.py` | Turns wall-clock opening times into instants; does an interval fit one opening period? |
+| `availability.py` | Candidate slots from the grid, minus that staff member's booked intervals |
+| `service.py` | `CalendarService`: `available_slots`, `is_available`, `book`, `reschedule`, `cancel` |
+| `errors.py` | Eight domain errors, naming business situations rather than SQL ones |
+
+The boundary is deliberate:
+
+```
+future tool / dialogue layer
+          ↓
+    CalendarService          ← availability is computed here, never guessed
+          ↓
+      PostgreSQL             ← the authority on conflicts
+```
+
+**Availability is advisory; the database decides.** `book` and `reschedule` do
+not check-then-insert — a check taken a moment earlier can already be stale.
+They write, and turn the exclusion constraint's refusal into `SlotUnavailable`,
+inside a savepoint so the session survives. A test runs two sessions that both
+check the same slot, both are told it is free, and proves exactly one booking
+survives.
+
+Behaviour worth knowing:
+
+- Intervals are half-open throughout, matching the constraint: 10:00–10:30 and
+  10:30–11:00 coexist; 10:00–10:30 and 10:15–10:45 do not.
+- An appointment must fit inside **one** opening period — it may not run
+  through a lunch break, even though both sides are open.
+- Starting exactly at opening is inside; ending exactly at closing is inside;
+  starting exactly at closing is not.
+- Availability follows the *staff member*, not the service: one person's two
+  services block each other.
+- Rescheduling updates the row in place, so the appointment keeps its id,
+  creation time and originating call — a moved booking is the same commitment
+  at a new time.
+- Cancelling marks the row rather than deleting it, and the partial constraint
+  means the slot is immediately bookable again.
+
+### Assumptions recorded in milestone 2
+
+The specification defines neither of these, so both are configuration with
+documented defaults rather than invented schema:
+
+- **`VOICEDESK_BUSINESS_TIMEZONE`** (default `UTC`). `business_hours` holds
+  wall-clock times and appointments are instants; something must say which
+  wall clock. VoiceDesk serves one business — multi-tenancy is a non-goal — so
+  this is one setting, not a column. A deployment sets its own. Opening periods
+  on a daylight-saving transition day are resolved by `zoneinfo`'s default fold
+  handling and by no rule of ours; with the default `UTC` there are no
+  transitions.
+- **`VOICEDESK_SLOT_GRANULARITY_MINUTES`** (default `15`). The grid available
+  start times sit on, measured from each period's own opening time rather than
+  from midnight, so a shop opening at 09:10 offers 09:10, 09:25, … .
+
+`services.staff_id` is singular, so a service has exactly one staff member and
+no staff-selection or load-balancing logic exists.
+
+Milestone 2 required **no schema change and no migration**: the M1 tables and
+the exclusion constraint already supported everything.
+
 ### Deliberately not built yet
 
 No audio, STT, TTS, WebSockets, Twilio, Anthropic calls, tool layer, dialogue
-layer, availability calculation, booking, rescheduling, cancellation, transfer,
-SMS, email, barge-in, cost computation, scenario evals or deployment. The
-`app/telephony/`, `app/audio/`, `app/providers/`, `app/dialogue/`, `app/tools/`
-and `app/calendar/` packages from the layout above **do not exist** — they will
-be created by the milestones that need them, rather than standing empty.
+layer, transfer, SMS, email, barge-in, cost computation, scenario evals or
+deployment. The `app/telephony/`, `app/audio/`, `app/providers/`,
+`app/dialogue/` and `app/tools/` packages from the layout above **do not
+exist** — they will be created by the milestones that need them, rather than
+standing empty.
+
+There is **no booking API**: the calendar core is a library the milestone-3
+tool layer will call. The only HTTP endpoint remains `GET /health`.
 
 `AppointmentStatus` has two values, `booked` and `cancelled`: `reschedule`
 moves an existing booking's times and leaves it `booked`, so it is not a third
@@ -205,7 +275,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (16 pass, 34 skip).
+one (16 pass, 99 skip). With a database: 115 pass.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing
