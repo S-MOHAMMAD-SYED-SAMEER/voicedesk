@@ -145,3 +145,14 @@ def haircut(session):
     session.add(service)
     session.commit()
     return service
+
+
+# --- tool fixtures --------------------------------------------------------
+
+
+@pytest.fixture
+def tools(session, calendar_settings):
+    """A tool context on the test database, with no call attached."""
+    from app.tools import ToolContext
+
+    return ToolContext(session=session, settings=calendar_settings)

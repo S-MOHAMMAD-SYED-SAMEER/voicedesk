@@ -237,24 +237,102 @@ no staff-selection or load-balancing logic exists.
 Milestone 2 required **no schema change and no migration**: the M1 tables and
 the exclusion constraint already supported everything.
 
+### What milestone 3 built
+
+The tool layer: the six tools from the scope list, in `app/tools/`, one module
+each. Every one is a plain function with the same shape —
+
+```python
+def book_appointment(context: ToolContext, *, service_name, starts_at,
+                     customer_name, phone) -> ToolResult: ...
+```
+
+— so a test calls it with a database session and nothing else. No audio, no
+telephony, no model, no HTTP endpoint. `GET /health` is still the only route.
+
+**Tools delegate; they do not reimplement.** Availability, opening hours,
+durations and conflict handling live in `app/calendar/` and are reached
+through `CalendarService`. A tool normalises its arguments, calls the
+service, and describes what happened. `tests/test_tools_smoke.py` enforces
+this by parsing each tool module: none may mention `BusinessHours`,
+`tstzrange`, `select(Appointment`, `timedelta`, `duration_minutes` or the
+calendar's internal helpers, and none may import a model provider or
+telephony library. Two answers to "is this free?" would be one too many, and
+the second one would be the one that hallucinated.
+
+**Failures are returned, not raised.** `ToolResult` is `success`, `data` and
+`error` — deliberately the shape of `tool_calls.result`, `tool_calls.success`
+and `tool_calls.error`, so milestone 4 can write one straight into the other.
+A model that asks for a slot someone else has just taken has to be told so in
+a way it can recover from; an exception would end the turn instead. The losing
+side of a race gets `success=False` with `slot_taken=True`, and its session
+stays usable — there is a test for exactly that.
+
+**The call is ambient, not an argument.** `ToolContext` carries the session,
+the settings and the `call_id`. No tool accepts a `call_id`, so a model cannot
+attribute a booking to a call that is not its own.
+
+**`TOOLS` is the single registry.** It maps the six specified names to the
+six functions; `get_tool` looks one up, and an unknown name raises rather than
+returning a business failure. Milestone 4 builds its tool definitions from
+this dictionary rather than keeping a second list that can drift.
+
+### Decisions recorded in milestone 3
+
+Five points the specification left open, resolved here rather than invented
+later:
+
+* **Tools take a `service_name`, not a service id.** A caller says "a
+  haircut"; ids are the calendar's currency, not a conversation's. Resolution
+  is deterministic and never guesses: trimmed, case-insensitive, exact, and
+  against **active** services only. Exactly one match proceeds; zero matches
+  fails and lists what is actually offered; two or more fails as ambiguous.
+  There is no fuzzy matching, so "Haircuts" does not silently become
+  "Haircut".
+* **Availability comes back as ISO-8601 strings in the configured business
+  timezone**, with that timezone named in the result. An empty list is a
+  *successful* answer — "nothing free that day" is information, not an error —
+  so a model can tell it apart from a lookup that went wrong.
+* **A timestamp with no offset is read as wall-clock time in the business
+  timezone**, the mirror of how availability is reported. "Ten o'clock" from a
+  caller means ten where the business is, and a naive timestamp names no
+  instant on its own. `CalendarService` still refuses naive datetimes; the
+  tool layer is where a caller's words become an instant.
+* **`take_message` returns the message; it does not store it.** Nothing in
+  milestone 3 persists anything of its own. `tool_calls.turn_id` is `NOT
+  NULL`, and turns are the dialogue layer's to create, so every tool's
+  arguments and result are written once, by milestone 4, through `tool_calls`.
+  A messages table now would give the same message two homes.
+* **`transfer_to_human` records the escalation and its reason; it does not
+  connect anything.** Moving audio is telephony's job and belongs to the
+  Twilio milestone. The reason is required, because "escalation precision and
+  recall" cannot be measured against an escalation that never said why.
+
+No schema change was needed, so there is still exactly one migration:
+`alembic check` reports no new operations.
+
 ### Deliberately not built yet
 
-No audio, STT, TTS, WebSockets, Twilio, Anthropic calls, tool layer, dialogue
-layer, transfer, SMS, email, barge-in, cost computation, scenario evals or
-deployment. The `app/telephony/`, `app/audio/`, `app/providers/`,
-`app/dialogue/` and `app/tools/` packages from the layout above **do not
+No audio, STT, TTS, WebSockets, Twilio, Anthropic calls, dialogue layer,
+transcript persistence, actual transfer, SMS, email, barge-in, cost
+computation, scenario evals or deployment. The `app/telephony/`, `app/audio/`,
+`app/providers/` and `app/dialogue/` packages from the layout above **do not
 exist** — they will be created by the milestones that need them, rather than
 standing empty.
 
-There is **no booking API**: the calendar core is a library the milestone-3
-tool layer will call. The only HTTP endpoint remains `GET /health`.
+Nothing persists a tool call yet: `tool_calls` rows need a `turn_id`, and
+turns arrive with the dialogue layer in milestone 4.
+
+There is **no booking API**: the calendar core and the tool layer are
+libraries the milestone-4 dialogue layer will call. The only HTTP endpoint
+remains `GET /health`.
 
 `AppointmentStatus` has two values, `booked` and `cancelled`: `reschedule`
 moves an existing booking's times and leaves it `booked`, so it is not a third
 state. `calls.direction` allows `outbound` because a direction has two values,
 but v1 only ever writes `inbound` — outbound calling is a non-goal.
 
-### Running locally (milestone 1)
+### Running locally
 
 ```bash
 python3.13 -m venv .venv && source .venv/bin/activate
@@ -275,7 +353,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (16 pass, 99 skip). With a database: 115 pass.
+one (42 pass, 168 skip). With a database: 210 pass.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing
