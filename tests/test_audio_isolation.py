@@ -140,24 +140,49 @@ def test_only_the_two_rest_adapters_use_an_http_client() -> None:
     ]
 
 
-# A vendor's endpoint and its header names are the wire format. Wherever one
+# A vendor's endpoints and its header names are its wire format. Wherever one
 # of these strings appears, that module knows how to talk to that vendor — and
-# exactly one module is allowed to.
+# only its own adapter is allowed to. There are two adapters per vendor from
+# milestone 7: whole-utterance REST and realtime streaming are genuinely
+# different protocols, and neither knows the other's.
 WIRE_FORMAT = {
-    "providers/deepgram_stt.py": ("api.deepgram.com", "Token "),
-    "providers/elevenlabs_tts.py": ("api.elevenlabs.io", "xi-api-key"),
+    "api.deepgram.com": {
+        "providers/deepgram_stt.py",
+        "providers/deepgram_stream_stt.py",
+    },
+    "Token ": {"providers/deepgram_stt.py", "providers/deepgram_stream_stt.py"},
+    "api.elevenlabs.io": {
+        "providers/elevenlabs_tts.py",
+        "providers/elevenlabs_stream_tts.py",
+    },
+    "xi-api-key": {"providers/elevenlabs_tts.py"},
+    "xi_api_key": {"providers/elevenlabs_stream_tts.py"},
 }
 
 
-def test_only_one_module_knows_each_vendor_wire_format() -> None:
-    for owner, markers in WIRE_FORMAT.items():
-        for marker in markers:
-            knows = [
-                module.relative_to(APP).as_posix()
-                for module in _modules(APP)
-                if marker in module.read_text()
-            ]
-            assert knows == [owner], f"{marker!r} appears in {knows}"
+def test_only_that_vendors_adapters_know_its_wire_format() -> None:
+    for marker, owners in WIRE_FORMAT.items():
+        knows = {
+            module.relative_to(APP).as_posix()
+            for module in _modules(APP)
+            if marker in module.read_text()
+        }
+        assert knows <= owners, f"{marker!r} also appears in {knows - owners}"
+
+
+def test_every_vendor_adapter_is_reached_only_through_the_factory() -> None:
+    """Nothing outside the factory picks an implementation for itself."""
+    adapters = {
+        "app.providers.deepgram_stt",
+        "app.providers.deepgram_stream_stt",
+        "app.providers.elevenlabs_tts",
+        "app.providers.elevenlabs_stream_tts",
+        "app.providers.anthropic_llm",
+    }
+    for module in _modules(APP):
+        if module.name == "factory.py":
+            continue
+        assert not _imports(module.read_text()) & adapters, module.name
 
 
 def test_a_vendor_name_never_reaches_the_audio_or_dialogue_layers() -> None:

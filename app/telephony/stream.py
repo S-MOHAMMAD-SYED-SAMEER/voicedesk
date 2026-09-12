@@ -1,31 +1,28 @@
 """The media stream: a telephone on one end, the same receptionist on the other.
 
-    carrier ──► WS /telephony/stream ──► µ-law → Audio ──► VoiceSession
+    carrier ──► WS /telephony/stream ──► µ-law → PCM ──► RealtimeSession
                                                               │
                                     Conversation → tools → calendar → PostgreSQL
                                                               │
-    carrier ◄── media frames ◄── µ-law ◄── Speech ◄───────────┘
+    carrier ◄── media frames ◄── µ-law ◄── streaming TTS ◄─────┘
 
-There is no second dialogue here. `VoiceSession.speak` is the same call the
-browser harness makes; only the audio at either end is different, and that
-conversion lives in `app/audio/telephony.py`. If this module ever starts
-deciding what to say, the layering has gone wrong.
+There is no second dialogue here. The realtime session makes the same
+`Conversation.send` call the browser harness makes; only the audio at either
+end is different, and that conversion lives in `app/audio/telephony.py`.
 
-**Two things about this being a real phone line.**
+**The reader never waits for a turn.** Frames are read in one task and turns
+run in another, so the caller can be heard while the receptionist is thinking
+— which is the whole of what makes an interruption possible. The previous
+milestone awaited each turn inline and was deaf for its duration.
 
-`VoiceSession.speak` is synchronous all the way down — speech recognition, the
-model, tool calls, PostgreSQL, synthesis — and running it inline would block
-this event loop for seconds while the carrier keeps sending frames. It is
-handed to a worker thread instead, so frames continue to be read while a turn
-is being worked out.
+**Replies are paced.** Audio is written roughly in real time rather than as
+fast as the socket accepts it, because a carrier buffers whatever it is given:
+sending a whole reply at once means that by the time somebody interrupts, they
+have already heard it. Pacing is what leaves something for `clear` to discard.
 
-And a carrier streams continuously, while the dialogue layer wants complete
-utterances. The boundary used here is an amplitude timer: buffer once somebody
-is speaking, and close the utterance after a fixed stretch below a fixed
-threshold. That is **not** voice-activity detection — no spectral analysis, no
-adaptive noise floor, no speech classifier, no partial transcripts, no
-barge-in. It is the least mechanism that turns a continuous stream into turns,
-it is temporary, and the milestone that owns real-time behaviour replaces it.
+With `realtime_enabled` off — the default — none of the above happens and the
+milestone-6 path runs instead: one complete utterance, then one complete
+reply. Both are here, and they share everything below `Conversation`.
 """
 
 import logging
@@ -41,27 +38,40 @@ from sqlalchemy.orm import Session
 from app.audio import VoiceSession, VoiceTurn
 from app.audio.telephony import (
     FRAME_BYTES,
+    FRAME_MS,
     TELEPHONY_SAMPLE_RATE,
     TelephonyAudioError,
+    downsample_16k_to_8k,
     frames,
     mean_amplitude,
     mulaw_decode,
+    mulaw_encode,
     speech_to_mulaw,
     utterance_from_mulaw,
 )
 from app.config import Settings, get_settings
 from app.db.session import get_sessionmaker
 from app.dialogue import Conversation
-from app.models import Call
-from app.providers.factory import build_model, build_stt, build_tts
+from app.models import Call, CallDirection
+from app.providers.factory import (
+    build_model,
+    build_streaming_stt,
+    build_streaming_tts,
+    build_stt,
+    build_tts,
+)
+from app.providers.streaming_tts import SpeechChunk
+from app.realtime import RealtimeSession, RealtimeTurn
 from app.telephony.events import (
     ConnectedEvent,
     MalformedEvent,
+    MarkEvent,
     MediaEvent,
     StartEvent,
     StopEvent,
     UnknownEvent,
     UnsupportedMediaFormat,
+    clear_frame,
     media_frame,
     mark_frame,
     parse_event,
@@ -73,19 +83,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["telephony"])
 
 GREETING = "Thanks for calling. How can I help?"
-# Refused the stream. 1008 is "policy violation", which is what an unknown
-# call or an audio format we will not decode amounts to.
 POLICY_VIOLATION = 1008
-# One byte per sample at 8 kHz: eight bytes is a millisecond.
 BYTES_PER_MS = TELEPHONY_SAMPLE_RATE // 1000
 
 
 class Utterance:
     """Continuous audio, cut into turns by an amplitude timer.
 
-    Buffering only starts once something is above the threshold, so a caller
-    who says nothing for a minute costs a counter rather than a minute of
-    memory. Temporary; see the module docstring.
+    The milestone-6 boundary, kept for the path that still uses it. It is not
+    voice-activity detection; `app/audio/vad.py` is what the realtime path
+    uses instead.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -102,7 +109,6 @@ class Utterance:
         return len(self._buffer) / BYTES_PER_MS
 
     def add(self, mulaw: bytes) -> bytes | None:
-        """One frame in; a complete utterance out, when there is one."""
         if not mulaw:
             return None
 
@@ -116,26 +122,71 @@ class Utterance:
             self._silence_ms += frame_ms
 
         if not self._speaking:
-            # Nobody has said anything yet, so there is nothing to keep.
             return None
 
         self._buffer.extend(mulaw)
 
         if len(self._buffer) >= self._max_bytes or self.duration_ms >= self._max_ms:
-            # A caller who has not paused in thirty seconds still deserves an
-            # answer, and an unbounded buffer on an open socket is a bug.
             return self.flush()
         if self._silence_ms >= self._silence_limit_ms:
             return self.flush()
         return None
 
     def flush(self) -> bytes | None:
-        """Whatever has been said so far, and start again."""
         audio = bytes(self._buffer) if self._buffer else None
         self._buffer = bytearray()
         self._silence_ms = 0.0
         self._speaking = False
         return audio
+
+
+class TwilioSink:
+    """Where a reply goes on a telephone line.
+
+    Paced, so an interruption has something to interrupt, and generation-aware
+    through the session that owns it: nothing reaches the carrier once the
+    turn that produced it is stale.
+    """
+
+    def __init__(
+        self, socket: WebSocket, stream_sid: str, *, pace: bool = True
+    ) -> None:
+        self._socket = socket
+        self._stream_sid = stream_sid
+        self._pace = pace
+        self.sent_frames = 0
+
+    async def send(self, chunk: SpeechChunk) -> None:
+        if not chunk.audio:
+            return
+        mulaw = _to_mulaw(chunk)
+        for payload in frames(mulaw, FRAME_BYTES):
+            await self._socket.send_json(media_frame(self._stream_sid, payload))
+            self.sent_frames += 1
+            if self._pace:
+                # Roughly real time. Without this the carrier holds the whole
+                # reply and `clear` arrives after the caller has heard it.
+                await anyio.sleep(len(payload) / BYTES_PER_MS / 1000)
+
+    async def clear(self) -> None:
+        await self._socket.send_json(clear_frame(self._stream_sid))
+
+    async def mark(self, name: str) -> None:
+        await self._socket.send_json(mark_frame(self._stream_sid, name))
+
+
+def _to_mulaw(chunk: SpeechChunk) -> bytes:
+    """A chunk of synthesised PCM, as the carrier wants it."""
+    if chunk.format.encoding != "pcm_s16le" or chunk.format.channels != 1:
+        raise TelephonyAudioError(f"Cannot put {chunk.format} on a telephone line.")
+    if chunk.format.sample_rate == TELEPHONY_SAMPLE_RATE:
+        return mulaw_encode(chunk.audio)
+    if chunk.format.sample_rate == 2 * TELEPHONY_SAMPLE_RATE:
+        return mulaw_encode(downsample_16k_to_8k(chunk.audio))
+    raise TelephonyAudioError(
+        f"Cannot convert {chunk.format.sample_rate} Hz to "
+        f"{TELEPHONY_SAMPLE_RATE} Hz."
+    )
 
 
 @dataclass
@@ -148,6 +199,7 @@ class StreamState:
     call: Call | None = None
     session: Session | None = None
     voice: VoiceSession | None = None
+    realtime: RealtimeSession | None = None
     utterance: Utterance | None = None
     marks: int = field(default=0)
 
@@ -159,10 +211,7 @@ class StreamState:
         """Record that the call ended, and let the database connection go.
 
         Only `ended_at`. `outcome` and `total_cost_usd` stay null — summarising
-        a call belongs to the milestone that owns post-call reporting, and a
-        guess written now would be indistinguishable from a fact later. If the
-        process dies before this runs, `ended_at` stays null too: nobody hung
-        up.
+        a call belongs to the milestone that owns post-call reporting.
         """
         if self.session is not None:
             try:
@@ -188,19 +237,23 @@ async def media_stream(socket: WebSocket) -> None:
     await socket.accept()
     state = StreamState(settings=settings)
     try:
-        await _converse(socket, state)
+        async with anyio.create_task_group() as turns:
+            # Turns run beside the reader, not inside it. When this scope
+            # exits — a stop, a disconnect, an error — everything in flight is
+            # cancelled with the call rather than outliving it.
+            await _converse(socket, state, turns)
+            turns.cancel_scope.cancel()
     except WebSocketDisconnect:
         pass
     finally:
         state.close()
 
 
-async def _converse(socket: WebSocket, state: StreamState) -> None:
+async def _converse(socket: WebSocket, state: StreamState, turns) -> None:
     """Read frames until the call ends.
 
     One malformed frame is logged and stepped over. A carrier is entitled to
-    send an event this milestone has never heard of, and ending somebody's
-    phone call over it would be the worse bug.
+    send an event this milestone has never heard of.
     """
     while True:
         message = await socket.receive()
@@ -209,8 +262,6 @@ async def _converse(socket: WebSocket, state: StreamState) -> None:
 
         raw = message.get("text")
         if raw is None:
-            # The carrier's control channel is text. A binary frame is not
-            # something this protocol defines.
             continue
 
         try:
@@ -225,20 +276,24 @@ async def _converse(socket: WebSocket, state: StreamState) -> None:
             logger.info("Ignoring a %r event on call %s", event.name, state.call_sid)
             continue
         if isinstance(event, StartEvent):
-            if not await _start(socket, state, event):
+            if not await _start(socket, state, event, turns):
                 return
             continue
         if isinstance(event, StopEvent):
+            await _stopping(state)
             return
+        if isinstance(event, MarkEvent):
+            _played(state, event)
+            continue
         if isinstance(event, MediaEvent):
             await _media(socket, state, event)
 
 
-async def _start(socket: WebSocket, state: StreamState, event: StartEvent) -> bool:
+async def _start(
+    socket: WebSocket, state: StreamState, event: StartEvent, turns
+) -> bool:
     """Identify the call, build everything it needs, and say hello."""
     if state.bound:
-        # A repeated start does not re-point an in-progress call at another
-        # one. Whatever this is, it is not this call changing identity.
         logger.warning(
             "Ignoring a second start on call %s (stream %s)",
             state.call_sid,
@@ -258,10 +313,9 @@ async def _start(socket: WebSocket, state: StreamState, event: StartEvent) -> bo
         select(Call).where(Call.provider_call_sid == event.call_sid)
     ).scalar_one_or_none()
     if call is None:
-        # The webhook creates the call, and the webhook is signed. A stream
-        # naming a call nobody answered is not a call: no row is invented for
-        # it, because that is the only thing authenticating this socket.
-        logger.error("Refusing stream %s: unknown call %s", event.stream_sid, event.call_sid)
+        logger.error(
+            "Refusing stream %s: unknown call %s", event.stream_sid, event.call_sid
+        )
         session.close()
         await socket.close(code=POLICY_VIOLATION)
         return False
@@ -270,14 +324,31 @@ async def _start(socket: WebSocket, state: StreamState, event: StartEvent) -> bo
     state.call_sid = event.call_sid
     state.call = call
     state.session = session
+    conversation = Conversation(
+        session, call, build_model(state.settings), state.settings
+    )
+
+    if state.settings.realtime_enabled:
+        state.realtime = RealtimeSession(
+            conversation=conversation,
+            stt=build_streaming_stt(state.settings),
+            tts=build_streaming_tts(state.settings),
+            sink=TwilioSink(socket, event.stream_sid),
+            settings=state.settings,
+            sample_rate=TELEPHONY_SAMPLE_RATE,
+            on_turn=lambda turn: _record_latency(state, turn),
+        )
+        state.realtime.attach(turns)
+        await state.realtime.greeting(GREETING)
+        return True
+
     state.utterance = Utterance(state.settings)
     state.voice = VoiceSession(
-        conversation=Conversation(session, call, build_model(state.settings), state.settings),
+        conversation=conversation,
         stt=build_stt(state.settings),
         tts=build_tts(state.settings),
         settings=state.settings,
     )
-
     greeting = await anyio.to_thread.run_sync(state.voice.greeting, GREETING)
     if greeting is not None:
         await _send_audio(socket, state, greeting)
@@ -286,8 +357,7 @@ async def _start(socket: WebSocket, state: StreamState, event: StartEvent) -> bo
 
 async def _media(socket: WebSocket, state: StreamState, event: MediaEvent) -> None:
     """One frame of the caller talking."""
-    if not state.bound or state.utterance is None:
-        # Audio before the call was identified belongs to nobody.
+    if not state.bound:
         return
     if event.stream_sid != state.stream_sid:
         logger.warning(
@@ -300,25 +370,60 @@ async def _media(socket: WebSocket, state: StreamState, event: MediaEvent) -> No
         # Our own voice coming back. Transcribing it would be a loop.
         return
 
+    if state.realtime is not None:
+        # Returns as soon as the frame is accounted for; whatever it started
+        # runs beside this loop.
+        await state.realtime.feed(mulaw_decode(event.audio))
+        return
+
+    if state.utterance is None:
+        return
     complete = state.utterance.add(event.audio)
     if complete is not None:
         await _turn(socket, state, complete)
 
 
+def _played(state: StreamState, event: MarkEvent) -> None:
+    """The carrier says the audio up to this marker has been heard."""
+    if state.realtime is not None and event.stream_sid == state.stream_sid:
+        state.realtime.playback_finished()
+
+
+async def _stopping(state: StreamState) -> None:
+    """The caller hung up. Answer anything already said, then stop."""
+    if state.realtime is not None:
+        with anyio.move_on_after(0.1):
+            await state.realtime.finish()
+
+
+async def _record_latency(state: StreamState, turn: RealtimeTurn) -> None:
+    """Write what only the audio layer could measure onto the turn rows.
+
+    The dialogue layer wrote those rows and returned their ids; it cannot know
+    how long the caller spoke or how long recognition took. Best effort: a
+    call is not worth failing over a metric.
+    """
+    result = turn.dialogue
+    if result is None or state.session is None:
+        return
+    from app.realtime.latency import record
+
+    record(state.session, result, turn.timing)
+
+
 async def _turn(socket: WebSocket, state: StreamState, mulaw: bytes) -> None:
-    """One complete utterance, through the dialogue layer and back as audio."""
-    assert state.voice is not None  # bound before any media is accepted
+    """One complete utterance, the milestone-6 way."""
+    assert state.voice is not None
 
     try:
         audio = utterance_from_mulaw(mulaw)
     except TelephonyAudioError as exc:
-        logger.warning("Could not read an utterance on call %s: %s", state.call_sid, exc)
+        logger.warning(
+            "Could not read an utterance on call %s: %s", state.call_sid, exc
+        )
         return
 
     try:
-        # Off the event loop: this is speech recognition, a model, tool calls,
-        # the database and synthesis, and the carrier keeps sending while it
-        # runs. `VoiceSession` is unchanged and still entirely synchronous.
         turn: VoiceTurn = await anyio.to_thread.run_sync(state.voice.speak, audio)
     except Exception:  # noqa: BLE001 - one bad turn must not end the call
         logger.exception("A turn failed on call %s", state.call_sid)
@@ -329,12 +434,7 @@ async def _turn(socket: WebSocket, state: StreamState, mulaw: bytes) -> None:
 
 
 async def _send_audio(socket: WebSocket, state: StreamState, speech) -> None:
-    """Play something down the line, then mark the end of it.
-
-    Frames go out as fast as they can be written; the carrier buffers them.
-    Pacing playback so it can be interrupted is barge-in, and barge-in is a
-    later milestone.
-    """
+    """Play a complete reply down the line, then mark the end of it."""
     try:
         mulaw = speech_to_mulaw(speech)
     except TelephonyAudioError as exc:

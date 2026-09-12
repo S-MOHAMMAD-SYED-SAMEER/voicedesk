@@ -1,6 +1,7 @@
 """The browser harness: a microphone on one end, the receptionist on the other.
 
-    browser mic → WS binary frame (one WAV) → VoiceSession → WS JSON + WAV
+    push-to-talk:  browser mic → one WAV → VoiceSession → JSON + WAV
+    realtime:      browser mic → 20 ms PCM frames → RealtimeSession → JSON + PCM
 
 It exists so the dialogue can be developed against a real voice without
 spending phone credits, which is exactly what the specification asks for.
@@ -11,6 +12,13 @@ Why a WebSocket rather than a POST, given that milestone 5 sends whole
 utterances: a `Conversation` holds its history in memory, so the connection
 *is* the call. Opening one starts a call, closing one ends it, and nothing
 needs a session registry keyed by an identifier the browser could get wrong.
+
+Both modes live here and share everything below `Conversation`. Push-to-talk
+is unchanged and remains the default; realtime is what `realtime_enabled`
+switches on, and a `mode` message flips between them mid-connection so the
+two can be compared without restarting anything. In realtime a binary frame
+from the browser is 20 ms of raw PCM and a binary frame from the server is a
+chunk of the reply; in push-to-talk both are complete WAVs.
 
 What this module owns: the socket, the call's lifetime, frame decoding, size
 and format checks, and the order replies go out in. What it does not own:
@@ -24,12 +32,23 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
+import anyio
+
 from app.audio import AudioError, VoiceSession, VoiceTurn, utterance_from_bytes
 from app.config import Settings, get_settings
 from app.db.session import get_sessionmaker
 from app.dialogue import Conversation
 from app.models import Call, CallDirection
-from app.providers.factory import build_model, build_stt, build_tts
+from app.providers.factory import (
+    build_model,
+    build_streaming_stt,
+    build_streaming_tts,
+    build_stt,
+    build_tts,
+)
+from app.providers.streaming_stt import PartialTranscript
+from app.providers.streaming_tts import SpeechChunk
+from app.realtime import RealtimeSession, RealtimeTurn, record_latency
 from app.static import harness_page
 
 logger = logging.getLogger(__name__)
@@ -53,6 +72,26 @@ def harness() -> HTMLResponse:
     return HTMLResponse(harness_page())
 
 
+class BrowserSink:
+    """Where a reply goes in the browser: binary chunks, in playback order."""
+
+    def __init__(self, socket: WebSocket) -> None:
+        self._socket = socket
+        self.sent = 0
+
+    async def send(self, chunk: SpeechChunk) -> None:
+        if not chunk.audio:
+            return
+        self.sent += 1
+        await self._socket.send_bytes(chunk.audio)
+
+    async def clear(self) -> None:
+        await self._socket.send_json({"type": "clear"})
+
+    async def mark(self, name: str) -> None:
+        await self._socket.send_json({"type": "mark", "name": name})
+
+
 @router.websocket("/ws/harness")
 async def harness_socket(socket: WebSocket) -> None:
     """One browser call, from answering to hanging up."""
@@ -61,39 +100,91 @@ async def harness_socket(socket: WebSocket) -> None:
 
     with get_sessionmaker()() as session:
         call = _start_call(session)
-        voice = _build_session(session, call, settings)
-
-        greeting = voice.greeting(GREETING)
-        await socket.send_json(
-            {
-                "type": "ready",
-                "call_id": str(call.id),
-                "greeting": GREETING,
-                "format": {
-                    "encoding": "pcm_s16le",
-                    "sample_rate": settings.audio_sample_rate,
-                    "channels": 1,
-                    "container": "wav",
-                },
-                "max_utterance_bytes": settings.max_utterance_bytes,
-                "audio_bytes": len(greeting.audio) if greeting else 0,
-            }
+        conversation = Conversation(session, call, build_model(settings), settings)
+        voice = VoiceSession(
+            conversation=conversation,
+            stt=build_stt(settings),
+            tts=build_tts(settings),
+            settings=settings,
         )
-        if greeting is not None:
-            await socket.send_bytes(greeting.audio)
 
         try:
-            await _converse(socket, voice, settings, str(call.id))
+            async with anyio.create_task_group() as turns:
+                realtime = _build_realtime(socket, session, conversation, settings)
+                realtime.attach(turns)
+
+                greeting = voice.greeting(GREETING)
+                await socket.send_json(
+                    {
+                        "type": "ready",
+                        "call_id": str(call.id),
+                        "greeting": GREETING,
+                        "realtime": settings.realtime_enabled,
+                        "format": {
+                            "encoding": "pcm_s16le",
+                            "sample_rate": settings.audio_sample_rate,
+                            "channels": 1,
+                            "container": "wav",
+                        },
+                        "frame_ms": settings.audio_frame_ms,
+                        "max_utterance_bytes": settings.max_utterance_bytes,
+                        "audio_bytes": len(greeting.audio) if greeting else 0,
+                    }
+                )
+                if greeting is not None:
+                    await socket.send_bytes(greeting.audio)
+
+                await _converse(
+                    socket, voice, realtime, settings, str(call.id), call
+                )
+                turns.cancel_scope.cancel()
         except WebSocketDisconnect:
             pass
         finally:
             _end_call(session, call)
 
 
+def _build_realtime(
+    socket: WebSocket, session, conversation: Conversation, settings: Settings
+) -> RealtimeSession:
+    """The streaming session, built whether or not it ends up being used.
+
+    Cheap to construct and nothing happens until a frame is fed to it, so the
+    `mode` message can switch modes without rebuilding anything mid-call.
+    """
+
+    async def on_partial(event: PartialTranscript) -> None:
+        # A guess, shown and nothing more. It never reaches the dialogue.
+        await socket.send_json({"type": "partial", "text": event.text})
+
+    async def on_turn(turn: RealtimeTurn) -> None:
+        if turn.dialogue is not None:
+            record_latency(session, turn.dialogue, turn.timing)
+        await socket.send_json(_realtime_message(turn))
+
+    return RealtimeSession(
+        conversation=conversation,
+        stt=build_streaming_stt(settings),
+        tts=build_streaming_tts(settings),
+        sink=BrowserSink(socket),
+        settings=settings,
+        sample_rate=settings.audio_sample_rate,
+        on_partial=on_partial,
+        on_turn=on_turn,
+    )
+
+
 async def _converse(
-    socket: WebSocket, voice: VoiceSession, settings: Settings, voice_call_id: str
+    socket: WebSocket,
+    voice: VoiceSession,
+    realtime: RealtimeSession,
+    settings: Settings,
+    voice_call_id: str,
+    call: Call,
 ) -> None:
     """Read frames until the caller hangs up or the socket closes."""
+    streaming = settings.realtime_enabled
+
     while True:
         frame = await socket.receive()
 
@@ -102,15 +193,29 @@ async def _converse(
 
         text = frame.get("text")
         if text is not None:
-            # The only message the browser sends as text is a hang-up.
             if '"hangup"' in text or text.strip() == "hangup":
+                if streaming:
+                    await realtime.finish()
                 return
+            if '"mode"' in text:
+                # Flip between the two paths mid-call, so they can be
+                # compared without restarting anything.
+                streaming = '"realtime"' in text
+                await socket.send_json({"type": "mode", "realtime": streaming})
+                continue
             await _error(socket, "unexpected_text_frame")
             continue
 
         data = frame.get("bytes")
         if data is None:
             await _error(socket, "empty_frame")
+            continue
+
+        if streaming:
+            # 20 ms of raw PCM. Returns as soon as the frame is accounted
+            # for; whatever it started runs beside this loop and reports
+            # itself when it is done.
+            await realtime.feed(data)
             continue
 
         try:
@@ -121,7 +226,7 @@ async def _converse(
             continue
 
         try:
-            turn = voice.speak(audio)
+            turn = await anyio.to_thread.run_sync(voice.speak, audio)
         except Exception as exc:  # noqa: BLE001 - one bad turn must not end the call
             # `VoiceSession` converts every failure it anticipates into a
             # `VoiceTurn`. Anything reaching here is unanticipated — a
@@ -138,6 +243,29 @@ async def _converse(
         await socket.send_json(_turn_message(turn))
         if turn.speech is not None:
             await socket.send_bytes(turn.speech.audio)
+
+
+def _realtime_message(turn: RealtimeTurn) -> dict[str, object]:
+    return {
+        "type": "turn",
+        "transcript": turn.transcript,
+        "confidence": turn.confidence,
+        "reply": turn.reply,
+        "failed": turn.failed,
+        "failure": turn.failure,
+        "interrupted": turn.interrupted,
+        "audio_bytes": 0,
+        "timings": {
+            "stt_ms": turn.timing.stt_latency_ms or 0,
+            "llm_ms": turn.dialogue.llm_latency_ms if turn.dialogue else 0,
+            "tts_ms": turn.timing.tts_latency_ms or 0,
+            "total_ms": turn.timing.first_audio_latency_ms or 0,
+        },
+        "tool_calls": [
+            {"name": record.tool_name, "success": record.success}
+            for record in (turn.dialogue.tool_calls if turn.dialogue else [])
+        ],
+    }
 
 
 def _turn_message(turn: VoiceTurn) -> dict[str, object]:
@@ -193,14 +321,3 @@ def _end_call(session: Session, call: Call) -> None:
     except Exception:  # pragma: no cover - cleanup must not mask the real error
         logger.exception("Could not record the end of call %s", call.id)
         session.rollback()
-
-
-def _build_session(session: Session, call: Call, settings: Settings) -> VoiceSession:
-    return VoiceSession(
-        conversation=Conversation(
-            session, call, build_model(settings), settings
-        ),
-        stt=build_stt(settings),
-        tts=build_tts(settings),
-        settings=settings,
-    )

@@ -6,8 +6,8 @@ below it there is audio conversion that has never heard of Twilio. Swapping
 carriers touches this file and its sibling modules, and nothing else.
 
 Twilio sends five kinds of frame the stream cares about — `connected`,
-`start`, `media`, `stop` — and others it may add at any time. Nothing here
-raises for an event it does not recognise: a carrier introducing `mark` or
+`start`, `media`, `stop` and `mark` — and others it may add at any time.
+Nothing here raises for an event it does not recognise: a carrier introducing
 `dtmf` must not be able to end somebody's phone call.
 
 What *is* refused is a frame this system cannot act on safely: audio it cannot
@@ -25,6 +25,8 @@ CONNECTED = "connected"
 START = "start"
 MEDIA = "media"
 STOP = "stop"
+MARK = "mark"
+CLEAR = "clear"
 
 # What a telephone carrier sends, and the only thing that can be decoded here.
 EXPECTED_ENCODING = "audio/x-mulaw"
@@ -90,13 +92,29 @@ class StopEvent:
 
 
 @dataclass(frozen=True)
+class MarkEvent:
+    """A marker sent earlier has now been played to the caller.
+
+    This is how playback completion is observed. Without it there is no way to
+    know whether a reply was heard or is still sitting in the carrier's
+    buffer, and therefore no way to measure a turn or to know whether an
+    interruption still has something to interrupt.
+    """
+
+    stream_sid: str
+    name: str = ""
+
+
+@dataclass(frozen=True)
 class UnknownEvent:
     """Something this milestone does not handle. Logged, then ignored."""
 
     name: str
 
 
-Event = ConnectedEvent | StartEvent | MediaEvent | StopEvent | UnknownEvent
+Event = (
+    ConnectedEvent | StartEvent | MediaEvent | StopEvent | MarkEvent | UnknownEvent
+)
 
 
 def parse_event(raw: str | bytes) -> Event:
@@ -124,6 +142,8 @@ def parse_event(raw: str | bytes) -> Event:
         return _media(body)
     if name == STOP:
         return _stop(body)
+    if name == MARK:
+        return _mark(body)
     return UnknownEvent(name=name)
 
 
@@ -192,6 +212,12 @@ def _stop(body: dict[str, Any]) -> StopEvent:
     )
 
 
+def _mark(body: dict[str, Any]) -> MarkEvent:
+    mark = body.get("mark")
+    mark = mark if isinstance(mark, dict) else {}
+    return MarkEvent(stream_sid=_stream_sid(body), name=str(mark.get("name", "")))
+
+
 def require_supported_format(event: StartEvent) -> None:
     """Refuse audio this system would only mangle.
 
@@ -227,7 +253,17 @@ def media_frame(stream_sid: str, payload: bytes) -> dict[str, Any]:
 
 def mark_frame(stream_sid: str, name: str) -> dict[str, Any]:
     """A marker the carrier echoes back when the audio before it has played."""
-    return {"event": "mark", "streamSid": stream_sid, "mark": {"name": name}}
+    return {"event": MARK, "streamSid": stream_sid, "mark": {"name": name}}
+
+
+def clear_frame(stream_sid: str) -> dict[str, Any]:
+    """Throw away whatever audio the carrier has buffered but not yet played.
+
+    What makes an interruption audible. Without it a caller who interrupts
+    still hears the rest of the sentence they interrupted, because the
+    carrier already has it.
+    """
+    return {"event": CLEAR, "streamSid": stream_sid}
 
 
 def _as_int(value: Any) -> int:

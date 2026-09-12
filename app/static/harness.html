@@ -25,8 +25,10 @@
 
 <h1>VoiceDesk harness</h1>
 <p class="sub">
-  Press and hold to talk, release to send. One complete utterance per turn —
-  this is not streaming, and no latency target is claimed.
+  Two modes. <strong>Push</strong> is hold-to-talk: one complete utterance,
+  one complete reply. <strong>Realtime</strong> streams continuously, ends
+  your turn when you stop talking, and lets you interrupt the reply. No
+  latency target is claimed in either.
 </p>
 
 <div class="row">
@@ -37,24 +39,36 @@
 <div class="row">
   <button id="connect">Connect</button>
   <button id="talk" disabled>Hold to talk</button>
+  <button id="live" disabled>Realtime: off</button>
   <button id="hangup" disabled>Hang up</button>
+</div>
+<div class="row">
+  <span class="meta" id="level">level —</span>
 </div>
 
 <div id="log"></div>
 
 <script>
 const SAMPLE_RATE = 16000;
+let sampleRate = SAMPLE_RATE;
+const FRAME_MS = 20;
 const els = {
   status: document.getElementById('status'),
   callid: document.getElementById('callid'),
   connect: document.getElementById('connect'),
   talk: document.getElementById('talk'),
+  live: document.getElementById('live'),
   hangup: document.getElementById('hangup'),
+  level: document.getElementById('level'),
   log: document.getElementById('log'),
 };
 
 let socket = null, audioContext = null, stream = null, node = null;
-let chunks = [], recording = false, pendingTurn = null;
+let chunks = [], recording = false;
+// Realtime state: a continuous capture, and a playback queue that can be
+// thrown away the moment the server says the caller interrupted.
+let realtime = false, streaming = false, pending = new Float32Array(0);
+let playAt = 0, playing = [], partialBox = null;
 
 function setStatus(text) { els.status.textContent = text; }
 
@@ -81,6 +95,55 @@ function play(bytes) {
   const audio = new Audio(url);
   audio.onended = () => URL.revokeObjectURL(url);
   audio.play().catch(() => URL.revokeObjectURL(url));
+}
+
+// --- realtime playback ----------------------------------------------------
+// Chunks are headerless PCM, so they are queued as buffers scheduled back to
+// back rather than handed to an <audio> element. That is also what makes them
+// droppable: stopping a scheduled source is instant.
+
+function playbackContext() {
+  if (!audioContext || audioContext.state === 'closed') {
+    audioContext = new AudioContext();
+  }
+  return audioContext;
+}
+
+function enqueue(bytes, rate) {
+  const context = playbackContext();
+  const samples = new Int16Array(bytes);
+  const buffer = context.createBuffer(1, samples.length, rate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
+
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  playAt = Math.max(playAt, context.currentTime);
+  source.start(playAt);
+  playAt += buffer.duration;
+  playing.push(source);
+  source.onended = () => { playing = playing.filter((s) => s !== source); };
+}
+
+function stopPlayback() {
+  for (const source of playing) { try { source.stop(); } catch (e) { /* already done */ } }
+  playing = [];
+  playAt = 0;
+}
+
+function showPartial(text) {
+  if (!partialBox) {
+    partialBox = document.createElement('div');
+    partialBox.className = 'turn';
+    partialBox.innerHTML = '<div class="who">you (hearing…)</div><div></div>';
+    els.log.prepend(partialBox);
+  }
+  partialBox.lastChild.textContent = text;
+}
+
+function clearPartial() {
+  if (partialBox) { partialBox.remove(); partialBox = null; }
 }
 
 // Float32 samples at whatever the browser captured, down to 16-bit PCM at
@@ -113,23 +176,38 @@ async function connect() {
   socket.onclose = () => {
     setStatus('disconnected');
     els.connect.disabled = false;
-    els.talk.disabled = els.hangup.disabled = true;
+    els.talk.disabled = els.hangup.disabled = els.live.disabled = true;
+    stopPlayback();
+    stopStreaming();
     stopCapture();
   };
   socket.onerror = () => setStatus('socket error');
 
   socket.onmessage = (event) => {
     if (typeof event.data !== 'string') {
-      play(event.data);
+      if (realtime) enqueue(event.data, sampleRate); else play(event.data);
       return;
     }
     const message = JSON.parse(event.data);
     if (message.type === 'ready') {
       els.callid.textContent = `call ${message.call_id}`;
       els.connect.disabled = true;
-      els.talk.disabled = els.hangup.disabled = false;
+      els.talk.disabled = els.hangup.disabled = els.live.disabled = false;
+      sampleRate = message.format.sample_rate || SAMPLE_RATE;
+      setRealtime(!!message.realtime);
       add('agent', message.greeting, 'greeting — not a transcript turn');
+    } else if (message.type === 'partial') {
+      showPartial(message.text);
+    } else if (message.type === 'clear') {
+      stopPlayback();
+      add('system', 'interrupted — queued audio discarded');
+    } else if (message.type === 'mark') {
+      // Playback of a batch finished. Nothing to show; kept for symmetry
+      // with the carrier path, where it is how a turn's length is measured.
+    } else if (message.type === 'mode') {
+      setRealtime(message.realtime);
     } else if (message.type === 'turn') {
+      clearPartial();
       const confidence = message.confidence == null
         ? '' : ` · confidence ${message.confidence}`;
       add('you', message.transcript || '(nothing heard)', confidence);
@@ -185,15 +263,84 @@ function sendUtterance() {
   chunks = [];
 }
 
+// --- realtime capture -----------------------------------------------------
+// The same ScriptProcessor, but instead of accumulating an utterance it emits
+// fixed-length frames continuously. The server decides where turns begin and
+// end; the browser only supplies audio and stops talking when told to.
+
+function setRealtime(on) {
+  realtime = on;
+  els.live.textContent = `Realtime: ${on ? 'on' : 'off'}`;
+  els.talk.disabled = on;
+  if (on) startStreaming(); else stopStreaming();
+}
+
+async function startStreaming() {
+  if (streaming) return;
+  streaming = true;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const context = playbackContext();
+  const source = context.createMediaStreamSource(stream);
+  node = context.createScriptProcessor(1024, 1, 1);
+  pending = new Float32Array(0);
+
+  node.onaudioprocess = (event) => {
+    const input = event.inputBuffer.getChannelData(0);
+    const merged = new Float32Array(pending.length + input.length);
+    merged.set(pending); merged.set(input, pending.length);
+    pending = merged;
+
+    const ratio = context.sampleRate / sampleRate;
+    const frame = Math.floor(sampleRate * FRAME_MS / 1000);
+    const needed = Math.floor(frame * ratio);
+
+    let peak = 0;
+    while (pending.length >= needed) {
+      const view = new DataView(new ArrayBuffer(frame * 2));
+      for (let i = 0; i < frame; i++) {
+        const value = Math.max(-1, Math.min(1, pending[Math.floor(i * ratio)] || 0));
+        peak = Math.max(peak, Math.abs(value));
+        view.setInt16(i * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      }
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(view.buffer);
+      pending = pending.slice(needed);
+    }
+    els.level.textContent = `level ${(peak * 100).toFixed(0)}%`;
+  };
+
+  source.connect(node);
+  node.connect(context.destination);
+  setStatus('listening (realtime)');
+}
+
+function stopStreaming() {
+  if (!streaming) return;
+  streaming = false;
+  stopCapture();
+  els.level.textContent = 'level —';
+  setStatus('connected');
+}
+
 els.connect.onclick = connect;
+els.live.onclick = () => {
+  const next = !realtime;
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'mode', value: next ? 'realtime' : 'push' }));
+  }
+  setRealtime(next);
+};
 els.hangup.onclick = () => {
   if (socket) socket.send(JSON.stringify({ type: 'hangup' }));
+  stopStreaming();
   stopCapture();
 };
-const press = (event) => { event.preventDefault(); startCapture(); };
+const press = (event) => {
+  event.preventDefault();
+  if (!realtime) startCapture();
+};
 const release = (event) => {
   event.preventDefault();
-  if (!recording) return;
+  if (realtime || !recording) return;
   stopCapture();
   if (audioContext) audioContext.close().then(() => {});
   sendUtterance();

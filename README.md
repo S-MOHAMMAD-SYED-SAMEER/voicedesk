@@ -126,7 +126,7 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 to 6 are implemented. Milestones 7–10 are not started.** Everything
+**Milestones 1 to 7 are implemented. Milestones 8–10 are not started.** Everything
 above this line is the specification; everything below describes only what
 exists today.
 
@@ -702,11 +702,201 @@ anywhere in this repository.
 * **Our own voice is never transcribed.** Only the inbound track is buffered;
   feeding the outbound track back to speech recognition would be a loop.
 
+### What milestone 7 built
+
+Realtime voice: the receptionist listens while it is talking, and stops when
+you interrupt it.
+
+```
+frames ─► VAD ─► endpointer ─► streaming STT ─► Conversation ─► streaming TTS ─► sink
+             │                      partials → display only            ▲
+             └── speech during playback ── cancel, drain, clear ────────┘
+```
+
+**The reader never waits for a turn.** This is the structural change the whole
+milestone rests on. Milestone 6 awaited each turn inline, which meant no
+inbound audio was read for its duration — a receptionist that cannot hear you
+while it is thinking cannot be interrupted. Turns now run in a task beside the
+reader, and a frame is accounted for the moment it arrives.
+
+**One dialogue, two sessions.** `RealtimeSession` is the streaming
+counterpart to `VoiceSession`, which is unchanged and still serves
+press-to-talk. Both call `Conversation.send`, so there is one dialogue
+implementation, one tool registry and one calendar beneath them. Nothing in
+`app/realtime/` imports the calendar, a tool, a provider implementation, or
+any transport — source-parsing tests enforce each of those.
+
+**Nothing was added to `pyproject.toml` but a declaration.** `anyio` was
+already installed by FastAPI and is now declared because application code
+imports it. No VAD library, no NumPy, no Torch, no ONNX, no vendor SDK.
+
+With `realtime_enabled` off — the default — none of this runs and the
+milestone-6 path does: one complete utterance, one complete reply.
+
+### Voice activity, and what it is not
+
+`app/audio/vad.py` measures a frame's RMS energy and how often it crosses
+zero, against a noise floor that re-learns itself from quiet frames, with
+hysteresis so one loud frame does not start an utterance and one quiet frame
+does not end one.
+
+**It is an energy detector, and it can be fooled.** Sustained background noise
+louder than the margin reads as somebody talking — a television in the next
+room will hold the line open, and because speech never teaches the floor, it
+will keep doing so. A quietly spoken word on a noisy line can be missed
+entirely. There is a test that asserts exactly this rather than hiding it.
+**No claim of parity with a trained detector is made**, and if that matters
+for a deployment, the interface is small enough to put one behind.
+
+What it buys instead: a few dozen lines of standard library running about six
+hundred times faster than real time, every decision reproducible from its
+inputs, no wheel, no model download and no native build — which is what lets
+the whole of this milestone be tested without a microphone.
+
+### Endpoint detection
+
+Voice activity answers "is there speech in this frame?"; endpointing answers
+"has the caller stopped?", which is harder, because speech is full of gaps.
+
+```
+IDLE ──speech ≥ 120 ms──► SPEAKING ──silence ≥ 700 ms──► ended
+                          SPEAKING ──length ≥ 20 s────► ended (truncated)
+```
+
+A **pre-roll buffer** keeps the 200 ms before the detector was convinced, so
+the first syllable survives — milestone 6 discarded it and clipped the start
+of every sentence. A **minimum** means a click or a cough never reaches a
+model. A **ceiling** answers a caller who never pauses, and bounds the buffer
+on an open socket. A caller who says nothing produces no utterance, no
+recognition and no model call at all.
+
+### Barge-in, and what cancellation can and cannot do
+
+When speech is detected while the receptionist is talking: the generation is
+bumped, the turn is cancelled, the synthesis stream is closed, the outbound
+queue is drained, and the transport is told to discard what it has buffered —
+`{"event":"clear"}` for the carrier, `{"type":"clear"}` for the browser.
+
+**Every unit of work carries a generation number**, and it is checked in four
+places: before a final transcript reaches the dialogue, before synthesis
+starts, **before every chunk of audio is written**, and after a cancelled task
+returns anyway. The third is the one that matters — a provider can have chunks
+in flight when it is closed.
+
+**Cancellation is partial, by nature.** `anyio.to_thread.run_sync` cannot
+terminate a running thread, so a model request and the tool calls it already
+made will finish after an interruption. That means:
+
+* **A booking that was already committed stays committed.** Undoing a real
+  appointment because the caller started talking would be worse than letting
+  it stand. There is a test that asserts the row survives.
+* **Its reply is discarded and never heard.**
+* **The dialogue is never run twice**, so nothing is done twice.
+* **The transcript of an interrupted turn still stands** — it is a record of
+  what happened, not of what was heard.
+
+This is deliberate, and it is the honest limit of interrupting work that has
+already reached a database.
+
+### Streaming providers
+
+Two new vendor-neutral interfaces, beside the batch ones rather than replacing
+them: `StreamingSpeechToText` (`stream → send → finish → partials, one final`)
+and `StreamingTextToSpeech` (`stream → chunks`). Chunks carry headerless PCM,
+because a WAV header per chunk is a container the caller cannot chain.
+
+**A partial transcript never reaches the dialogue layer.** Partials are shown
+and logged; only a final crosses into `Conversation`, because a tool called
+from a guess is a booking made from a guess. Two tests exist purely to prove
+it — one at the session, one through the browser socket.
+
+**This streams audio, not model tokens.** The dialogue still produces one
+complete reply; the tool loop and the prompt are untouched. What is streamed
+is the synthesis of that finished sentence, which is where the waiting is.
+
+`offline_streaming.py` is the default and what every test uses: scripted
+partials and a tone, no network, no key. `deepgram_stream_stt.py` and
+`elevenlabs_stream_tts.py` speak their services' WebSocket protocols over the
+`websockets` client already present — no vendor SDK, and each is the only
+module in the project that knows its service's wire format.
+
+**Both were written from documented protocol knowledge and have never been run
+against the real services from this repository.** Their frame shapes are
+verified against a fake connection; recognition quality, voice quality,
+latency and reconnect behaviour are not claimed and have not been observed. If
+a field name disagrees with a vendor's current documentation, believe the
+documentation.
+
+On a mid-utterance provider disconnect there is **no reconnect-and-resume**: a
+reconnect loses the audio the service had buffered, and a silently truncated
+transcript is worse than asking the caller to repeat themselves.
+
+### Latency
+
+Eight timestamps are captured per turn, and four numbers derived from them:
+
+| Number | Definition |
+|---|---|
+| `audio_ms` | `speech_end − speech_start` — how long the caller spoke |
+| `stt_latency_ms` | `stt_final − speech_end` — recognition after they stopped |
+| `tts_latency_ms` | `tts_first_audio − dialogue_end` — time to the first audio |
+| `first_audio_latency_ms` | `tts_first_audio − speech_end` — **the specification's number** |
+| `turn_latency_ms` | `playback_end − speech_end` |
+
+The first three are written to `turns.audio_ms`, `turns.stt_latency_ms` and
+`turns.tts_latency_ms` — the columns that have been null since milestone 1.
+`llm_latency_ms` remains milestone 4's and is not duplicated. `playback_end`
+is held in session state and stored nowhere: a column for a number the carrier
+may never report would be worse than deriving one.
+
+This required the smallest possible change to the dialogue layer:
+`DialogueResult` now also carries the two turn ids it wrote. Nothing in that
+package reads them; they exist so a layer that can measure what the dialogue
+cannot has somewhere to put it. No behaviour changed, and **no migration was
+added — there are still two.**
+
+### p50 / p95
+
+```bash
+python -m app.metrics           # or --call <id> for one call
+```
+
+```
+metric                         count       p50       p95
+--------------------------------------------------------
+first_audio_latency_ms            34       910      1420
+caller_audio_ms                   34      1800      3100
+```
+
+Percentiles come from `statistics.quantiles`. Rows from before realtime have
+null latencies and are **skipped rather than counted as zero**; a turn missing
+any one stage is not measured at all, because a partial sum would read as a
+fast turn. Below twenty samples the table marks the row and says the numbers
+are arithmetic rather than evidence. No endpoint, no dashboard, no time series.
+
+**It measures; it does not promise.** Whether the specification's 1.2-second
+target is met depends on provider round-trips this repository has never made.
+
+### What has and has not actually been proved
+
+The tests and the simulated smoke runs drive **real** WebSockets against the
+**real** application and a **real** PostgreSQL database, with scripted model
+and speech providers and a simulated carrier. They exercise voice activity
+detection, endpointing, the streaming interfaces, the generation model,
+barge-in, cancellation, the dialogue path, latency capture and the call
+lifecycle.
+
+**They do not place a telephone call and they do not call any external
+service.** There is no Anthropic, Deepgram, ElevenLabs or Twilio credential in
+this development environment, and none has ever been used. Nothing here
+establishes real carrier behaviour, real latency, real transcription accuracy,
+real voice quality or production readiness, and no such claim is made anywhere
+in this repository.
+
 ### Deliberately not built yet
 
-No outbound calling, SMS, email, actual transfer, streaming speech,
-voice-activity detection, barge-in, latency instrumentation, cost computation,
-scenario evals or deployment.
+No outbound calling, SMS, email, actual transfer, cost computation, scenario
+evals or deployment.
 
 **No external service has ever been called from this code, and no telephone
 call has ever been placed.** Every test injects a scripted model and scripted
@@ -771,7 +961,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (342 pass, 330 skip). With a database: 672 pass.
+one (474 pass, 398 skip). With a database: 872 pass.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing

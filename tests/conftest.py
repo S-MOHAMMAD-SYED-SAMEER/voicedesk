@@ -470,3 +470,127 @@ def twilio_call(session):
     session.add(call)
     session.commit()
     return call
+
+
+# --- realtime fixtures ----------------------------------------------------
+
+
+def pcm_tone(
+    amplitude: int = 9000,
+    *,
+    ms: int = 20,
+    hz: float = 220.0,
+    sample_rate: int = 8000,
+) -> bytes:
+    """One frame of a tone, loud enough to read as speech."""
+    import math
+    import struct
+
+    count = int(sample_rate * ms / 1000)
+    return struct.pack(
+        f"<{count}h",
+        *(int(amplitude * math.sin(2 * math.pi * hz * i / sample_rate)) for i in range(count)),
+    )
+
+
+def pcm_silence(*, ms: int = 20, sample_rate: int = 8000) -> bytes:
+    return b"\x00\x00" * int(sample_rate * ms / 1000)
+
+
+class FakeClock:
+    """A clock a test moves by hand, so latency assertions are exact."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, ms: float) -> None:
+        self.now += ms
+
+
+class RecordingSink:
+    """An `AudioSink` that keeps everything, so a test can look at it."""
+
+    def __init__(self) -> None:
+        self.chunks: list = []
+        self.clears = 0
+        self.marks: list[str] = []
+        self.order: list[str] = []
+
+    async def send(self, chunk) -> None:
+        self.chunks.append(chunk)
+        self.order.append("send")
+
+    async def clear(self) -> None:
+        self.chunks.clear()
+        self.clears += 1
+        self.order.append("clear")
+
+    async def mark(self, name: str) -> None:
+        self.marks.append(name)
+        self.order.append("mark")
+
+
+@pytest.fixture
+def realtime_settings(calendar_settings):
+    """Realtime on, with the approved defaults."""
+    return calendar_settings.model_copy(update={"realtime_enabled": True})
+
+
+@pytest.fixture
+def realtime(session, call, realtime_settings):
+    """Build a `RealtimeSession` over scripted everything."""
+    from app.dialogue import Conversation
+    from app.providers.offline_streaming import (
+        OfflineStreamingSpeechToText,
+        OfflineStreamingTextToSpeech,
+    )
+    from app.realtime import RealtimeSession
+
+    def build(
+        *responses,
+        stt=None,
+        tts=None,
+        model=None,
+        raises=None,
+        sink=None,
+        settings=None,
+        clock=None,
+        on_partial=None,
+        sample_rate: int = 8000,
+    ):
+        resolved = settings or realtime_settings
+        built_sink = sink if sink is not None else RecordingSink()
+        built = RealtimeSession(
+            conversation=Conversation(
+                session, call, model or FakeModel(*responses, raises=raises), resolved
+            ),
+            stt=stt or OfflineStreamingSpeechToText(),
+            tts=tts or OfflineStreamingTextToSpeech(sample_rate=sample_rate),
+            sink=built_sink,
+            settings=resolved,
+            sample_rate=sample_rate,
+            clock=clock,
+            on_partial=on_partial,
+        )
+        return built, built_sink
+
+    return build
+
+
+@pytest.fixture
+def anyio_backend():
+    """Async tests run on asyncio only; trio is not a dependency here."""
+    return "asyncio"
+
+
+@pytest.fixture
+def db_session(session):
+    """The database session, under a name that does not shadow other uses.
+
+    The realtime tests call their session objects `session`, so the ORM one
+    needs a different name in those files.
+    """
+    return session

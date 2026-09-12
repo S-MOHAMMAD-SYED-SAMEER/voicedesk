@@ -22,6 +22,7 @@ from app.telephony import stream, webhook
 from app.telephony.events import (
     ConnectedEvent,
     MalformedEvent,
+    MarkEvent,
     MediaEvent,
     StartEvent,
     StopEvent,
@@ -37,6 +38,7 @@ router.include_router(stream.router)
 __all__ = [
     "ConnectedEvent",
     "MalformedEvent",
+    "MarkEvent",
     "MediaEvent",
     "StartEvent",
     "StopEvent",

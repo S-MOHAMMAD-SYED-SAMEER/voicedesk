@@ -15,9 +15,14 @@ dependencies = [
     # The speech adapters are plain REST calls; no vendor SDK is needed for
     # either of them. Also what the test suite uses to drive the app.
     "httpx>=0.28",
-    # Uvicorn serves the harness socket through this. Already arrived with
-    # uvicorn[standard]; declared because the application now depends on it.
+    # Uvicorn serves the sockets through this, and the streaming speech
+    # adapters connect out through it. Already arrived with uvicorn[standard];
+    # declared because the application now depends on it.
     "websockets>=14",
+    # Task groups, cancel scopes and the threadpool the realtime layer runs
+    # the synchronous dialogue on. Already arrived with FastAPI; declared
+    # because application code imports it directly.
+    "anyio>=4",
 ]
 
 # Dependencies arrive with the milestone that first imports them, so an

@@ -4,9 +4,9 @@ All settings come from the environment (or a local `.env`), never from
 module-level constants scattered through the code. See `.env.example`.
 
 Milestone 1 needs the application's identity and its database; milestone 4
-adds the dialogue model, milestone 5 the speech providers and milestone 6 the
-telephony carrier. Messaging configuration belongs to the milestone that
-introduces it and is deliberately absent.
+adds the dialogue model, milestone 5 the speech providers, milestone 6 the
+telephony carrier and milestone 7 realtime voice. Messaging configuration
+belongs to the milestone that introduces it and is deliberately absent.
 """
 
 from functools import lru_cache
@@ -23,6 +23,11 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # runs the whole browser harness without an account anywhere.
 STT_PROVIDERS = ("offline", "deepgram")
 TTS_PROVIDERS = ("offline", "elevenlabs")
+# The streaming counterparts, selected separately: a deployment may want
+# one vendor for whole utterances and another for realtime, and the two
+# interfaces are genuinely different protocols.
+STREAMING_STT_PROVIDERS = ("offline", "deepgram")
+STREAMING_TTS_PROVIDERS = ("offline", "elevenlabs")
 
 
 class Settings(BaseSettings):
@@ -118,6 +123,59 @@ class Settings(BaseSettings):
     telephony_silence_ms: int = Field(default=800, gt=0)
     telephony_silence_threshold: int = Field(default=500, ge=0)
     telephony_max_utterance_ms: int = Field(default=30_000, gt=0)
+
+    # --- Realtime ---
+    # Off by default, so the milestone-6 behaviour — a whole utterance, then a
+    # whole reply — is exactly what runs until somebody opts in.
+    realtime_enabled: bool = False
+    stt_streaming_provider: str = "offline"
+    tts_streaming_provider: str = "offline"
+    # What a carrier sends, and therefore the grain everything works in.
+    audio_frame_ms: int = Field(default=20, gt=0)
+
+    # --- Voice activity ---
+    # An energy detector, not a trained one: how much louder than the room
+    # something has to be before it counts as somebody talking. See
+    # `app/audio/vad.py` for what that does and does not buy.
+    vad_min_speech_ms: int = Field(default=120, gt=0)
+    vad_energy_threshold: int = Field(default=300, ge=0)
+    # How fast the ambient level is re-learned from quiet frames.
+    vad_noise_floor_alpha: float = Field(default=0.05, gt=0.0, le=1.0)
+    # Leaving speech is easier than entering it, so one quiet frame between
+    # words does not end a sentence.
+    vad_hysteresis: float = Field(default=0.6, gt=0.0, le=1.0)
+    # Audio kept from before the detector was convinced, so the first syllable
+    # is not clipped.
+    vad_preroll_ms: int = Field(default=200, ge=0)
+
+    # --- Endpointing ---
+    endpoint_silence_ms: int = Field(default=700, gt=0)
+    # A caller who never pauses is answered anyway. Also what bounds the
+    # utterance buffer on an open socket.
+    endpoint_max_utterance_ms: int = Field(default=20_000, gt=0)
+
+    # --- Interruption ---
+    barge_in_enabled: bool = True
+
+    @field_validator("stt_streaming_provider")
+    @classmethod
+    def _known_streaming_stt(cls, value: str) -> str:
+        if value not in STREAMING_STT_PROVIDERS:
+            raise ValueError(
+                f"{value!r} is not a streaming speech-to-text provider; use one "
+                f"of {', '.join(STREAMING_STT_PROVIDERS)}"
+            )
+        return value
+
+    @field_validator("tts_streaming_provider")
+    @classmethod
+    def _known_streaming_tts(cls, value: str) -> str:
+        if value not in STREAMING_TTS_PROVIDERS:
+            raise ValueError(
+                f"{value!r} is not a streaming text-to-speech provider; use one "
+                f"of {', '.join(STREAMING_TTS_PROVIDERS)}"
+            )
+        return value
 
     @field_validator("stt_provider")
     @classmethod

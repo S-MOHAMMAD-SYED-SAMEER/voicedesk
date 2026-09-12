@@ -11,6 +11,8 @@ module must never drag in a vendor's request shapes.
 
 from app.config import Settings, get_settings
 from app.providers.llm import LanguageModel
+from app.providers.streaming_stt import StreamingSpeechToText
+from app.providers.streaming_tts import StreamingTextToSpeech
 from app.providers.stt import SpeechToText
 from app.providers.tts import TextToSpeech
 
@@ -51,3 +53,29 @@ def build_model(settings: Settings | None = None) -> LanguageModel:
     from app.providers.anthropic_llm import AnthropicLanguageModel
 
     return AnthropicLanguageModel(settings=settings or get_settings())
+
+
+def build_streaming_stt(settings: Settings | None = None) -> StreamingSpeechToText:
+    """The streaming transcriber named by `stt_streaming_provider`."""
+    resolved = settings or get_settings()
+    if resolved.stt_streaming_provider == "deepgram":
+        from app.providers.deepgram_stream_stt import DeepgramStreamingSpeechToText
+
+        return DeepgramStreamingSpeechToText(settings=resolved)
+
+    from app.providers.offline_streaming import OfflineStreamingSpeechToText
+
+    return OfflineStreamingSpeechToText()
+
+
+def build_streaming_tts(settings: Settings | None = None) -> StreamingTextToSpeech:
+    """The streaming synthesiser named by `tts_streaming_provider`."""
+    resolved = settings or get_settings()
+    if resolved.tts_streaming_provider == "elevenlabs":
+        from app.providers.elevenlabs_stream_tts import ElevenLabsStreamingTextToSpeech
+
+        return ElevenLabsStreamingTextToSpeech(settings=resolved)
+
+    from app.providers.offline_streaming import OfflineStreamingTextToSpeech
+
+    return OfflineStreamingTextToSpeech(sample_rate=resolved.audio_sample_rate)

@@ -22,6 +22,7 @@ table is the readable transcript, not a replay log. Milestone 5 will hold a
 `Conversation` for the length of a call.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -59,6 +60,12 @@ class DialogueResult:
     failed: bool = False
     llm_latency_ms: int = 0
     prompt_version: str = SYSTEM_PROMPT_VERSION
+    # The two rows this turn wrote. Exposed so a layer that measures things
+    # the dialogue cannot see — how long the caller spoke, how long
+    # recognition and synthesis took — can fill in the columns that already
+    # exist for them. Nothing in this package reads them back.
+    caller_turn_id: uuid.UUID | None = None
+    agent_turn_id: uuid.UUID | None = None
 
 
 class Conversation:
@@ -113,7 +120,9 @@ class Conversation:
             reply, failed = LOOP_EXHAUSTED_REPLY, True
 
         latency_ms = sum(latencies)
-        self._persist(caller_text, spoken_at, reply, latency_ms, records)
+        caller_turn_id, agent_turn_id = self._persist(
+            caller_text, spoken_at, reply, latency_ms, records
+        )
         return DialogueResult(
             text=reply,
             tool_calls=records,
@@ -121,6 +130,8 @@ class Conversation:
             booked_appointment_id=_booked(records),
             failed=failed,
             llm_latency_ms=latency_ms,
+            caller_turn_id=caller_turn_id,
+            agent_turn_id=agent_turn_id,
         )
 
     def _run(self, records: list[ToolCallRecord], latencies: list[int]) -> str:
@@ -167,8 +178,11 @@ class Conversation:
         reply: str,
         latency_ms: int,
         records: list[ToolCallRecord],
-    ) -> None:
+    ) -> tuple[uuid.UUID, uuid.UUID]:
         """Write the transcript: one caller turn, one agent turn, its tools.
+
+        Returns the two row ids. Nothing in this package uses them; they are
+        there so the audio layer can record what only it can measure.
 
         Both timestamps are set here rather than by the database, because
         PostgreSQL's `now()` is the transaction's time — two rows written
@@ -207,6 +221,7 @@ class Conversation:
 
         self._session.add_all([caller_turn, agent_turn])
         self._session.commit()
+        return caller_turn.id, agent_turn.id
 
 
 def _escalated(records: list[ToolCallRecord]) -> bool:

@@ -108,13 +108,42 @@ def test_stop_without_a_stop_object_is_still_a_stop() -> None:
 # --- events this milestone does not handle --------------------------------
 
 
-@pytest.mark.parametrize("name", ["mark", "dtmf", "something-invented-later"])
+@pytest.mark.parametrize("name", ["dtmf", "something-invented-later"])
 def test_an_unhandled_event_is_reported_not_raised(name: str) -> None:
     """A carrier adding an event must not be able to end somebody's call."""
     event = parse_event(json.dumps({"event": name, "streamSid": STREAM}))
 
     assert isinstance(event, UnknownEvent)
     assert event.name == name
+
+
+def test_a_mark_says_which_audio_finished_playing() -> None:
+    """Handled from milestone 7: it is how playback completion is observed."""
+    from app.telephony.events import MarkEvent
+
+    event = parse_event(
+        json.dumps(
+            {"event": "mark", "streamSid": STREAM, "mark": {"name": "reply-1"}}
+        )
+    )
+
+    assert isinstance(event, MarkEvent)
+    assert (event.stream_sid, event.name) == (STREAM, "reply-1")
+
+
+def test_a_mark_without_a_name_is_still_a_mark() -> None:
+    from app.telephony.events import MarkEvent
+
+    assert isinstance(
+        parse_event(json.dumps({"event": "mark", "streamSid": STREAM})), MarkEvent
+    )
+
+
+def test_a_clear_frame_empties_the_carriers_buffer() -> None:
+    """What makes an interruption audible rather than merely intended."""
+    from app.telephony.events import clear_frame
+
+    assert clear_frame(STREAM) == {"event": "clear", "streamSid": STREAM}
 
 
 # --- frames that cannot be read -------------------------------------------
