@@ -18,6 +18,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # What `output_config.effort` accepts, shallowest first.
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
+# The environment name that turns on every production guard at once: the
+# preflight in `app/preflight.py`, the closed documentation surface, and the
+# refusal to serve the development harness.
+PRODUCTION = "production"
+
+# Local development only. Named here so the preflight can recognise it and
+# refuse to let it become a production connection target.
+DEFAULT_DATABASE_URL = (
+    "postgresql+psycopg://voicedesk:voicedesk@localhost:5432/voicedesk"
+)
+
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+LOG_FORMATS = ("text", "json")
+
 # Speech providers that can be selected by name. "offline" needs no
 # credentials and no network, which is why it is the default: a fresh clone
 # runs the whole browser harness without an account anywhere.
@@ -42,9 +56,12 @@ class Settings(BaseSettings):
     environment: str = "local"
     debug: bool = False
 
-    database_url: str = (
-        "postgresql+psycopg://voicedesk:voicedesk@localhost:5432/voicedesk"
-    )
+    # A local development default, and deliberately not a usable production
+    # one. `app/preflight.py` refuses to start in production while this is
+    # still what `database_url` says, so a deployment that forgets to
+    # configure a database fails at boot rather than quietly connecting to
+    # localhost with a well-known password.
+    database_url: str = DEFAULT_DATABASE_URL
 
     # --- Calendar ---
     # `business_hours` stores wall-clock times and appointments are instants,
@@ -181,6 +198,54 @@ class Settings(BaseSettings):
     # is how long a media stream was open; what a carrier bills is its own
     # record of the call, rounded up, which this process never sees.
 
+    # --- Production ---
+    # The browser harness is a development tool that spends model budget and
+    # writes real rows, so production never serves it whatever this says —
+    # see `Settings.harness_available`. The switch exists so a shared staging
+    # deployment can turn it off too.
+    harness_enabled: bool = True
+    # How long a draining process waits for calls already in progress before
+    # it stops. Long enough for a caller to finish a sentence and hear the
+    # answer; short enough that a deployment is not held up by one open
+    # socket.
+    shutdown_grace_seconds: float = Field(default=20.0, gt=0)
+    # Calls accepted at once. Each holds one database connection for its
+    # whole length, and the default pool is 5 + 10 overflow, so 20 would
+    # exhaust it — the cap is here to reject the twenty-first caller quickly
+    # rather than let them block on a connection that is not coming.
+    max_concurrent_calls: int = Field(default=10, gt=0)
+    # A call that never ends. An hour is far longer than any receptionist
+    # conversation and short enough to bound a forgotten socket.
+    max_call_seconds: int = Field(default=3600, gt=0)
+    # A voice webhook is a few hundred bytes of form data. 64 KiB is two
+    # orders of magnitude of headroom and still refuses a body sent to
+    # exhaust memory.
+    max_webhook_bytes: int = Field(default=64 * 1024, gt=0)
+    # One carrier control frame. Media frames are 20 ms of µ-law in base64,
+    # well under a kilobyte; this bounds a frame sent to be large.
+    max_stream_frame_bytes: int = Field(default=128 * 1024, gt=0)
+    # How long the token in a stream URL stays usable. A carrier connects
+    # within seconds of the webhook; five minutes is generous.
+    stream_token_ttl_seconds: int = Field(default=300, gt=0)
+
+    log_level: str = "INFO"
+    log_format: str = "text"
+
+    # --- Timeouts ---
+    # Every outbound boundary has one. A caller is on the telephone: a
+    # provider that has not answered in this long is a provider that has
+    # failed, whatever it does afterwards.
+    #
+    # The model request runs on a worker thread and a timeout there cannot
+    # kill that thread — it ends the *wait*, and the abandoned request
+    # finishes into nothing. See the README.
+    dialogue_timeout_seconds: float = Field(default=30.0, gt=0)
+    stream_connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    # Between messages, not for the whole stream: a synthesiser sending audio
+    # steadily is working, however long the reply is.
+    stream_read_timeout_seconds: float = Field(default=20.0, gt=0)
+    database_connect_timeout_seconds: int = Field(default=10, gt=0)
+
     # --- Evaluation ---
     # Where `python -m app.evals` runs. Blank means "derive one from
     # `database_url` by appending `_evals`", which is the safe default: the
@@ -189,6 +254,42 @@ class Settings(BaseSettings):
     # runner refuses outright to touch a database whose name does not end in
     # `_evals`, whether that name was derived or configured here.
     eval_database_url: str = ""
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() == PRODUCTION
+
+    @property
+    def harness_available(self) -> bool:
+        """Whether the development harness may be served at all.
+
+        Two conditions, and production overrides the switch: an operator who
+        leaves `harness_enabled` at its default must still not end up with an
+        unauthenticated page that spends model budget.
+        """
+        return self.harness_enabled and not self.is_production
+
+    @field_validator("log_level")
+    @classmethod
+    def _known_log_level(cls, value: str) -> str:
+        level = value.strip().upper()
+        if level not in LOG_LEVELS:
+            raise ValueError(
+                f"{value!r} is not a log level; use one of "
+                f"{', '.join(LOG_LEVELS)}"
+            )
+        return level
+
+    @field_validator("log_format")
+    @classmethod
+    def _known_log_format(cls, value: str) -> str:
+        chosen = value.strip().lower()
+        if chosen not in LOG_FORMATS:
+            raise ValueError(
+                f"{value!r} is not a log format; use one of "
+                f"{', '.join(LOG_FORMATS)}"
+            )
+        return chosen
 
     @field_validator("stt_streaming_provider")
     @classmethod

@@ -21,6 +21,12 @@ def get_engine() -> Engine:
         # Recycle connections the server closed underneath us rather than
         # surfacing a stale-connection error on the first query.
         pool_pre_ping=True,
+        # A database that is not answering should say so in seconds. Without
+        # this, opening a connection waits on the operating system's TCP
+        # timeout — minutes — with a caller on the line.
+        connect_args={"connect_timeout": settings.database_connect_timeout_seconds},
+        # SQL echoed here carries caller names, numbers and transcripts, so
+        # it follows `debug`, which production refuses to have on.
         echo=settings.debug,
     )
 

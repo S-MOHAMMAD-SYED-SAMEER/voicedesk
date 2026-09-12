@@ -59,8 +59,13 @@ class AnthropicLanguageModel:
         self._model = model or resolved.dialogue_model
         self._max_tokens = max_tokens or resolved.dialogue_max_tokens
         self._effort = effort or resolved.dialogue_effort
+        # An explicit timeout, because the SDK's default is minutes and a
+        # caller is on the telephone. It ends the *wait*: the request is
+        # abandoned, and if it was running on a worker thread that thread
+        # finishes into nothing. Nothing here can kill a thread.
         self._client = client or anthropic.Anthropic(
-            api_key=resolved.anthropic_api_key or None
+            api_key=resolved.anthropic_api_key or None,
+            timeout=resolved.dialogue_timeout_seconds,
         )
 
     @property

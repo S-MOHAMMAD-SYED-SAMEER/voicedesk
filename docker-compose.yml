@@ -1,0 +1,62 @@
+# A reproducible local stack: PostgreSQL, the migrations, and the application.
+#
+#   docker compose up --build          # database, migrate once, then serve
+#   curl localhost:8000/health         # liveness
+#   curl localhost:8000/ready          # readiness: database + migration state
+#
+# Development convenience. The credentials below are local defaults and the
+# environment is deliberately not `production` — supply real values through
+# the environment before running this anywhere that matters.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: voicedesk
+      POSTGRES_PASSWORD: voicedesk
+      POSTGRES_DB: voicedesk
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voicedesk"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  # Migrations run once, as their own step, and the application waits for
+  # them to finish. They are deliberately not run from application startup:
+  # replicas would race the same DDL, and a failed migration would take a
+  # running service down with it.
+  migrate:
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      VOICEDESK_DATABASE_URL: postgresql+psycopg://voicedesk:voicedesk@db:5432/voicedesk
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      VOICEDESK_DATABASE_URL: postgresql+psycopg://voicedesk:voicedesk@db:5432/voicedesk
+      # Leave unset to fall back to the SDK's own ANTHROPIC_API_KEY lookup.
+      # Without one the harness still connects and plays its greeting, and
+      # each turn comes back as a failure rather than dropping the socket.
+      VOICEDESK_ANTHROPIC_API_KEY: ${VOICEDESK_ANTHROPIC_API_KEY:-}
+    ports:
+      - "8000:8000"
+
+volumes:
+  db-data:

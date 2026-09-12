@@ -1,0 +1,33 @@
+# Everything the image does not need, so a build is small and cannot pick up
+# a local secret by accident.
+
+# Secrets and local configuration. `.env.example` is safe and stays.
+.env
+.env.*
+!.env.example
+
+# Local environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Version control and editor state
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# The test suite is not in the image: it needs PostgreSQL, and a production
+# artefact should not carry fixtures. The evaluation suite ships inside
+# `app/evals` because it is part of the application package.
+tests/
+
+# Docker's own files
+Dockerfile
+.dockerignore
+docker-compose.yml

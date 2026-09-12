@@ -103,31 +103,35 @@ def test_the_suite_surfaces_the_unguarded_reschedule(evaluated) -> None:
     )
 
 
-def test_the_reschedule_conflict_exposes_a_real_defect(evaluated) -> None:
-    """A failed reschedule poisons the session, and the turn cannot be written.
+def test_the_reschedule_conflict_now_completes(evaluated) -> None:
+    """The defect this scenario found in milestone 9 is fixed.
 
-    This is frozen milestone-2/3 behaviour, found by the suite rather than
-    arranged around: `CalendarService._write` rolls back its savepoint but
-    leaves the appointment carrying the times the database refused, so the
-    next flush repeats the violation. M9 measures it and does not repair it.
+    A conflicting reschedule used to leave the call's session in a
+    pending-rollback state, so the turn could not be written and the caller
+    heard nothing. `CalendarService._write` now rolls back before raising, and
+    the scenario passes with its ground truth **unchanged** — the reschedule
+    still fails, both appointments still stand, and the caller is still told.
     """
     result = next(r for r in evaluated.results if r.name == "reschedule_conflict")
 
-    assert result.passed is False
-    assert [f.category for f in result.assessment.blocking] == ["PROVIDER_FAILURE"]
-    assert "ExclusionViolation" in result.trace.error
+    assert result.passed is True
+    assert result.assessment.findings == []
+    assert result.trace.error is None
+    # The move was still refused, and nothing moved.
+    assert [record.success for record in result.trace.tool_calls] == [False]
+    assert len(result.trace.final_appointments) == 2
 
 
-def test_every_other_scenario_passes(evaluated) -> None:
+def test_every_scenario_passes(evaluated) -> None:
     failed = [r.name for r in evaluated.results if not r.passed]
 
-    assert failed == ["reschedule_conflict"]
+    assert failed == []
 
 
 def test_task_success_is_what_it_is(evaluated) -> None:
-    """Seventeen of eighteen. Not rounded up, not explained away."""
-    assert evaluated.passed == 17
-    assert evaluated.task_success.percent == pytest.approx(94.4, abs=0.1)
+    """Eighteen of eighteen, with no scenario or expectation changed."""
+    assert evaluated.passed == 18
+    assert evaluated.task_success.percent == pytest.approx(100.0, abs=0.1)
 
 
 def test_no_provider_was_ever_called(evaluated) -> None:
@@ -203,8 +207,14 @@ def test_a_passing_selection_exits_zero(database_url: str, capsys) -> None:
     capsys.readouterr()
 
 
-def test_a_failing_selection_exits_one(database_url: str, capsys) -> None:
-    assert main(["--scenario", "reschedule_conflict", "--quiet"]) == 1
+def test_a_selection_that_cannot_meet_its_threshold_exits_one(
+    database_url: str, capsys
+) -> None:
+    """Every scenario passes now, so the threshold is what can refuse."""
+    assert (
+        main(["--scenario", "booking_available", "--fail-under", "101", "--quiet"])
+        == 1
+    )
     capsys.readouterr()
 
 
@@ -215,26 +225,14 @@ def test_a_threshold_that_is_met_exits_zero(database_url: str, capsys) -> None:
 
 def test_a_threshold_that_is_not_met_exits_one(database_url: str, capsys) -> None:
     assert (
-        main(["--scenario", "reschedule_conflict", "--fail-under", "50", "--quiet"]) == 1
+        main(["--scenario", "cancel_success", "--fail-under", "100.5", "--quiet"]) == 1
     )
     capsys.readouterr()
 
 
-def test_a_threshold_below_the_score_passes_a_mixed_selection(
-    database_url: str, capsys
-) -> None:
-    """Half pass, so 50% clears a 50 threshold and a 51 would not."""
-    code = main(
-        [
-            "--scenario",
-            "booking_available",
-            "--scenario",
-            "reschedule_conflict",
-            "--fail-under",
-            "50",
-            "--quiet",
-        ]
-    )
+def test_the_release_gate_is_met(database_url: str, capsys) -> None:
+    """The gate milestone 10 releases against: every scenario, all of them."""
+    code = main(["--fail-under", "100", "--quiet"])
 
     assert code == 0
     capsys.readouterr()

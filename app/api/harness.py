@@ -28,7 +28,7 @@ anything about dialogue, tools, the calendar, or a vendor's API.
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,12 @@ from app.providers.factory import (
 from app.providers.streaming_stt import PartialTranscript
 from app.providers.streaming_tts import SpeechChunk
 from app.realtime import RealtimeSession, RealtimeTurn, record_latency
+from app.runtime import (
+    CallRefused,
+    ConversationGuard,
+    close_when_idle,
+    get_admission,
+)
 from app.static import harness_page
 
 logger = logging.getLogger(__name__)
@@ -67,10 +73,25 @@ BROWSER_TO_NUMBER = "harness"
 
 GREETING = "Thanks for calling. How can I help?"
 
+# 1013 is "try again later": what a browser is told when this process is
+# draining or already carrying as many calls as it will take.
+TRY_AGAIN_LATER = 1013
+# 1008 is a policy violation: what a browser is told when the harness is not
+# being served at all.
+POLICY_VIOLATION = 1008
+
 
 @router.get("/harness", response_class=HTMLResponse)
 def harness() -> HTMLResponse:
-    """The development page. One button, one log, no build step."""
+    """The development page. One button, one log, no build step.
+
+    Absent in production rather than merely inert. This page opens a socket
+    that spends model budget and writes real rows, and it asks nobody who
+    they are — so production does not serve it, whatever `harness_enabled`
+    says. A 404 rather than a 403: there is nothing here to probe.
+    """
+    if not get_settings().harness_available:
+        raise HTTPException(status_code=404, detail="Not Found")
     return HTMLResponse(harness_page())
 
 
@@ -98,11 +119,39 @@ class BrowserSink:
 async def harness_socket(socket: WebSocket) -> None:
     """One browser call, from answering to hanging up."""
     settings = get_settings()
+    if not settings.harness_available:
+        # Refused before the handshake completes, so nothing is built and no
+        # budget can be spent.
+        await socket.close(code=POLICY_VIOLATION)
+        return
+
+    admission = get_admission()
+    try:
+        with admission.admit():
+            await _call(socket, settings)
+    except CallRefused as exc:
+        logger.info("Refusing a harness call: %s", exc)
+        await socket.close(code=TRY_AGAIN_LATER)
+
+
+async def _call(socket: WebSocket, settings: Settings) -> None:
+    """One admitted browser call."""
     await socket.accept()
 
-    with get_sessionmaker()() as session:
+    session = get_sessionmaker()()
+    guard: ConversationGuard | None = None
+    try:
         call = _start_call(session)
-        conversation = Conversation(session, call, build_model(settings), settings)
+        # Every turn reaches the database through this, one at a time. The
+        # session objects cannot tell the difference: a guard exposes `send`
+        # and nothing else, which is all either of them asks for.
+        guard = ConversationGuard(
+            conversation=Conversation(
+                session, call, build_model(settings), settings
+            ),
+            timeout=settings.dialogue_timeout_seconds,
+        )
+        conversation = guard
         voice = VoiceSession(
             conversation=conversation,
             stt=build_stt(settings),
@@ -144,6 +193,11 @@ async def harness_socket(socket: WebSocket) -> None:
             pass
         finally:
             _end_call(session, call)
+    finally:
+        # Not closed while a thread could still be inside a turn. An
+        # abandoned model request cannot be cancelled, so the choice is
+        # between waiting for it and closing the session underneath it.
+        close_when_idle(guard, session, settings.shutdown_grace_seconds)
 
 
 def _build_realtime(

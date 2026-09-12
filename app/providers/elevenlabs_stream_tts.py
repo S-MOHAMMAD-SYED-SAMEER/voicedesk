@@ -24,8 +24,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlencode
 
+import anyio
+
 from app.config import Settings, get_settings
 from app.providers.speech import PCM_S16LE, AudioFormat
+from app.providers.streaming import messages
 from app.providers.streaming_tts import SpeechChunk, VoiceError, VoiceUnavailable
 
 logger = logging.getLogger(__name__)
@@ -56,12 +59,16 @@ class ElevenLabsVoiceStream:
         api_key: str,
         audio_format: AudioFormat,
         connect,
+        connect_timeout: float = 10.0,
+        read_timeout: float = 20.0,
     ) -> None:
         self._text = text
         self._url = url
         self._api_key = api_key
         self._format = audio_format
         self._connect = connect
+        self._connect_timeout = connect_timeout
+        self._read_timeout = read_timeout
         self._connection = None
         self._closed = False
 
@@ -73,7 +80,8 @@ class ElevenLabsVoiceStream:
             connect = websockets.connect
 
         try:
-            self._connection = await connect(self._url)
+            with anyio.fail_after(self._connect_timeout):
+                self._connection = await connect(self._url)
         except Exception as exc:  # noqa: BLE001
             raise VoiceUnavailable(f"ElevenLabs could not be reached: {exc}") from exc
 
@@ -87,7 +95,7 @@ class ElevenLabsVoiceStream:
             )
             await self._connection.send(json.dumps(END_OF_TEXT))
 
-            async for raw in self._connection:
+            async for raw in messages(self._connection, self._read_timeout):
                 if self._closed:
                     return
                 chunk = self._read(raw)
@@ -183,6 +191,8 @@ class ElevenLabsStreamingTextToSpeech:
             encoding=PCM_S16LE, sample_rate=rate, channels=1, container="raw"
         )
         self._connect = connect
+        self._connect_timeout = resolved.stream_connect_timeout_seconds
+        self._read_timeout = resolved.stream_read_timeout_seconds
 
     @property
     def format(self) -> AudioFormat:
@@ -200,4 +210,6 @@ class ElevenLabsStreamingTextToSpeech:
             api_key=self._api_key,
             audio_format=self._format,
             connect=self._connect,
+            connect_timeout=self._connect_timeout,
+            read_timeout=self._read_timeout,
         )

@@ -24,8 +24,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlencode
 
+import anyio
+
 from app.config import Settings, get_settings
 from app.providers.speech import AudioFormat
+from app.providers.streaming import messages
 from app.providers.streaming_stt import (
     FinalTranscript,
     PartialTranscript,
@@ -68,9 +71,15 @@ def connection_url(audio_format: AudioFormat, model: str) -> str:
 class DeepgramSpeechStream:
     """One utterance's recognition, over one socket."""
 
-    def __init__(self, connection: Any, audio_format: AudioFormat) -> None:
+    def __init__(
+        self,
+        connection: Any,
+        audio_format: AudioFormat,
+        idle_timeout: float = 20.0,
+    ) -> None:
         self._connection = connection
         self._format = audio_format
+        self._idle_timeout = idle_timeout
         self._closed = False
 
     async def send(self, pcm: bytes) -> None:
@@ -95,7 +104,7 @@ class DeepgramSpeechStream:
     async def events(self) -> AsyncIterator[TranscriptEvent]:
         """Interim results, then the one that counts."""
         try:
-            async for raw in self._connection:
+            async for raw in messages(self._connection, self._idle_timeout):
                 event = _read(raw, self._format)
                 if event is not None:
                     yield event
@@ -185,6 +194,8 @@ class DeepgramStreamingSpeechToText:
         self._api_key = api_key if api_key is not None else resolved.deepgram_api_key
         self._model = model or resolved.stt_model
         self._connect = connect
+        self._connect_timeout = resolved.stream_connect_timeout_seconds
+        self._read_timeout = resolved.stream_read_timeout_seconds
 
     def stream(self, audio_format: AudioFormat) -> "_PendingStream":
         if not self._api_key:
@@ -194,6 +205,8 @@ class DeepgramStreamingSpeechToText:
             headers={"Authorization": f"Token {self._api_key}"},
             audio_format=audio_format,
             connect=self._connect,
+            connect_timeout=self._connect_timeout,
+            read_timeout=self._read_timeout,
         )
 
 
@@ -205,8 +218,19 @@ class _PendingStream:
     made when audio first arrives.
     """
 
-    def __init__(self, *, url: str, headers: dict[str, str], audio_format, connect):
+    def __init__(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        audio_format,
+        connect,
+        connect_timeout: float = 10.0,
+        read_timeout: float = 20.0,
+    ):
         self._url = url
+        self._connect_timeout = connect_timeout
+        self._read_timeout = read_timeout
         self._headers = headers
         self._format = audio_format
         self._connect = connect
@@ -220,14 +244,17 @@ class _PendingStream:
 
                 connect = websockets.connect
             try:
-                connection = await connect(
-                    self._url, additional_headers=self._headers
-                )
+                with anyio.fail_after(self._connect_timeout):
+                    connection = await connect(
+                        self._url, additional_headers=self._headers
+                    )
             except Exception as exc:  # noqa: BLE001
                 raise SpeechUnavailable(
                     f"Deepgram could not be reached: {exc}"
                 ) from exc
-            self._opened = DeepgramSpeechStream(connection, self._format)
+            self._opened = DeepgramSpeechStream(
+                connection, self._format, self._read_timeout
+            )
         return self._opened
 
     async def send(self, pcm: bytes) -> None:

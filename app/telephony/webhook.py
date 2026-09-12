@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.db.session import get_sessionmaker
 from app.models import Call, CallDirection
+from app.telephony import stream_token
 from app.telephony.security import SIGNATURE_HEADER, is_valid_signature
 from app.telephony.twiml import TwiMLError, connect_stream
 
@@ -45,7 +46,16 @@ async def voice(request: Request) -> Response:
         # Not merely inert: absent. There is nothing here to probe.
         raise HTTPException(status_code=404, detail="Not Found")
 
-    params = _parameters(await request.body())
+    body = await request.body()
+    if len(body) > settings.max_webhook_bytes:
+        # A voice webhook is a few hundred bytes of form data. Anything this
+        # much larger is not one, and is refused before it is parsed.
+        logger.warning(
+            "Refused a %d byte body to the voice webhook.", len(body)
+        )
+        raise HTTPException(status_code=413, detail="Body too large")
+
+    params = _parameters(body)
 
     if settings.validate_twilio_signature:
         if not is_valid_signature(
@@ -64,15 +74,33 @@ async def voice(request: Request) -> Response:
         raise HTTPException(status_code=400, detail="No CallSid")
 
     try:
-        body = connect_stream(settings.public_base_url)
-    except TwiMLError as exc:
+        twiml = connect_stream(
+            settings.public_base_url, token=_stream_token(call_sid, settings)
+        )
+    except (TwiMLError, stream_token.StreamTokenError) as exc:
         logger.error("Cannot answer a call: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     with get_sessionmaker()() as session:
         _record_call(session, call_sid, params, settings)
 
-    return Response(content=body, media_type=TWIML_MEDIA_TYPE)
+    return Response(content=twiml, media_type=TWIML_MEDIA_TYPE)
+
+
+def _stream_token(call_sid: str, settings: Settings) -> str | None:
+    """The credential the media socket will ask for, bound to this call.
+
+    Minted only when signatures are being checked. The switch that turns
+    signature validation off exists for replaying captured requests locally,
+    where there is no auth token to sign with and no attacker to keep out;
+    production cannot turn it off at all — `app/preflight.py` refuses to
+    start.
+    """
+    if not settings.validate_twilio_signature:
+        return None
+    return stream_token.mint(
+        settings.twilio_auth_token, call_sid, settings.stream_token_ttl_seconds
+    )
 
 
 def _parameters(body: bytes) -> dict[str, str]:

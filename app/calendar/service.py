@@ -222,13 +222,30 @@ class CalendarService:
         """Persist, translating the exclusion constraint into a domain error.
 
         The flush happens inside a savepoint so a refusal rolls back only this
-        write and leaves the session usable.
+        write. The savepoint does its job — the appointment is expired and
+        restored, not left carrying times the database refused — but it is not
+        enough on its own: a failed `flush()` deactivates the *enclosing*
+        session transaction as well, and every later statement on that session
+        then raises `PendingRollbackError` until somebody rolls it back.
+
+        So this rolls back before raising. Without it a caller whose
+        reschedule collided could not be told about it: the reply, the
+        transcript, every later turn and the call's own `ended_at` all fail on
+        a session nobody had reset. Nothing committed is lost — this service
+        commits its own work on the way out, so the only thing discarded is
+        the write that was just refused.
+
+        The asymmetry is worth knowing. A refused *insert* (`book`) leaves the
+        session usable, because the pending row is simply expunged; a refused
+        *update* (`reschedule`) does not. Rolling back on both paths costs
+        nothing and means no caller has to know which is which.
         """
         try:
             with self._session.begin_nested():
                 self._session.add(appointment)
                 self._session.flush()
         except IntegrityError as exc:
+            self._session.rollback()
             if isinstance(exc.orig, psycopg.errors.ExclusionViolation):
                 raise SlotUnavailable(
                     f"{staff_id} is already booked between "

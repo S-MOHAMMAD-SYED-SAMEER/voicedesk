@@ -27,10 +27,10 @@ def test_health_needs_no_database(client: TestClient) -> None:
     assert client.get("/health").status_code == 200
 
 
-def test_the_http_surface_is_health_the_harness_and_the_voice_webhook(
+def test_the_http_surface_is_health_ready_the_harness_and_the_voice_webhook(
     client: TestClient,
 ) -> None:
-    """`/health` from milestone 1, the development page, and the call answerer.
+    """Liveness, readiness, the development page, and the call answerer.
 
     There is still no booking API and no dialogue API: the calendar, the tools
     and the dialogue layer are libraries, and the only ways to reach them over
@@ -39,7 +39,7 @@ def test_the_http_surface_is_health_the_harness_and_the_voice_webhook(
     """
     paths = set(client.get("/openapi.json").json()["paths"])
 
-    assert paths == {"/health", "/harness", "/telephony/voice"}
+    assert paths == {"/health", "/ready", "/harness", "/telephony/voice"}
 
 
 def test_the_voice_webhook_is_absent_until_telephony_is_enabled(

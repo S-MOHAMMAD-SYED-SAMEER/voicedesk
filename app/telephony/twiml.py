@@ -6,7 +6,7 @@ browser harness, and letting the carrier speak the greeting would put a second
 unrelated voice on the line before the first one.
 """
 
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from xml.sax.saxutils import quoteattr
 
 STREAM_PATH = "/telephony/stream"
@@ -16,7 +16,9 @@ class TwiMLError(Exception):
     """The instruction could not be built."""
 
 
-def stream_url(public_base_url: str, path: str = STREAM_PATH) -> str:
+def stream_url(
+    public_base_url: str, path: str = STREAM_PATH, token: str | None = None
+) -> str:
     """The `wss://` address the carrier should connect its media stream to.
 
     Built from configuration rather than the incoming request: behind a proxy
@@ -35,17 +37,25 @@ def stream_url(public_base_url: str, path: str = STREAM_PATH) -> str:
         raise TwiMLError(f"{public_base_url!r} is not a usable base URL.")
 
     scheme = {"http": "ws", "ws": "ws"}.get(parts.scheme, "wss")
-    return urlunsplit((scheme, parts.netloc, parts.path.rstrip("/") + path, "", ""))
+    # The token, when there is one, rides in the query string: it is the only
+    # thing the carrier will carry from here to the socket, and a WebSocket
+    # upgrade has nowhere else to put it.
+    query = urlencode({"token": token}) if token else ""
+    return urlunsplit(
+        (scheme, parts.netloc, parts.path.rstrip("/") + path, query, "")
+    )
 
 
-def connect_stream(public_base_url: str, path: str = STREAM_PATH) -> str:
+def connect_stream(
+    public_base_url: str, path: str = STREAM_PATH, token: str | None = None
+) -> str:
     """TwiML telling the carrier to connect a bidirectional media stream.
 
     The URL goes through `quoteattr`, which both quotes and escapes it — a
     base URL carrying an ampersand would otherwise produce a document that is
     not XML.
     """
-    url = quoteattr(stream_url(public_base_url, path))
+    url = quoteattr(stream_url(public_base_url, path, token))
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response><Connect>"

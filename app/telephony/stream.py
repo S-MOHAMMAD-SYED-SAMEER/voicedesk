@@ -26,6 +26,7 @@ reply. Both are here, and they share everything below `Conversation`.
 """
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -64,6 +65,13 @@ from app.providers.factory import (
 )
 from app.providers.streaming_tts import SpeechChunk
 from app.realtime import RealtimeSession, RealtimeTurn
+from app.runtime import (
+    CallRefused,
+    ConversationGuard,
+    close_when_idle,
+    get_admission,
+)
+from app.telephony import stream_token
 from app.telephony.events import (
     ConnectedEvent,
     MalformedEvent,
@@ -86,6 +94,13 @@ router = APIRouter(tags=["telephony"])
 
 GREETING = "Thanks for calling. How can I help?"
 POLICY_VIOLATION = 1008
+# An ordinary end to the call, said out loud. Returning from the handler ends
+# the connection either way; closing explicitly is what tells the carrier the
+# call was ended on purpose rather than dropped.
+NORMAL_CLOSURE = 1000
+# "Try again later": draining, or already carrying as many calls as this
+# process will take.
+TRY_AGAIN_LATER = 1013
 # Who carried the call, for the accounting row. The name of the carrier, not
 # of its SDK: nothing here imports one.
 CARRIER_NAME = "twilio"
@@ -203,6 +218,8 @@ class StreamState:
     call_sid: str = ""
     call: Call | None = None
     session: Session | None = None
+    guard: ConversationGuard | None = None
+    opened_at: float = field(default_factory=time.monotonic)
     voice: VoiceSession | None = None
     realtime: RealtimeSession | None = None
     utterance: Utterance | None = None
@@ -211,6 +228,17 @@ class StreamState:
     @property
     def bound(self) -> bool:
         return self.call is not None
+
+    @property
+    def expired(self) -> bool:
+        """Has this call run longer than any call reasonably should?
+
+        A receptionist conversation is minutes. The cap is an hour, and it is
+        here so that a socket nobody closed cannot hold a database connection
+        for ever.
+        """
+        elapsed = time.monotonic() - self.opened_at
+        return elapsed > self.settings.max_call_seconds
 
     def close(self) -> None:
         """Record that the call ended, and let the database connection go.
@@ -236,7 +264,14 @@ class StreamState:
                 logger.exception("Could not record the end of call %s", self.call_sid)
                 self.session.rollback()
             finally:
-                self.session.close()
+                # Not closed while a thread could still be inside a turn: an
+                # abandoned model request keeps using this session, and
+                # cannot be cancelled or killed. Waiting is the only honest
+                # option, and when the wait runs out the session is left for
+                # the collector rather than closed underneath it.
+                close_when_idle(
+                    self.guard, self.session, self.settings.shutdown_grace_seconds
+                )
                 self.session = None
 
 
@@ -248,6 +283,17 @@ async def media_stream(socket: WebSocket) -> None:
         await socket.close(code=POLICY_VIOLATION)
         return
 
+    admission = get_admission()
+    try:
+        with admission.admit():
+            await _call(socket, settings)
+    except CallRefused as exc:
+        logger.info("Refusing a media stream: %s", exc)
+        await socket.close(code=TRY_AGAIN_LATER)
+
+
+async def _call(socket: WebSocket, settings: Settings) -> None:
+    """One admitted media stream."""
     await socket.accept()
     state = StreamState(settings=settings)
     try:
@@ -277,6 +323,23 @@ async def _converse(socket: WebSocket, state: StreamState, turns) -> None:
         raw = message.get("text")
         if raw is None:
             continue
+
+        if len(raw) > state.settings.max_stream_frame_bytes:
+            # A media frame is 20 ms of µ-law in base64, well under a
+            # kilobyte. Anything this much larger is not one.
+            logger.warning(
+                "Ignoring a %d byte frame on call %s.", len(raw), state.call_sid
+            )
+            continue
+
+        if state.expired:
+            logger.warning(
+                "Ending call %s: it has run for longer than %ds.",
+                state.call_sid,
+                state.settings.max_call_seconds,
+            )
+            await socket.close(code=NORMAL_CLOSURE)
+            return
 
         try:
             event = parse_event(raw)
@@ -315,6 +378,17 @@ async def _start(
         )
         return True
 
+    if not _stream_token_ok(socket, state, event):
+        # Nothing about why, and nothing about the token. The carrier was
+        # given one in the TwiML it was answered with; anybody else was not.
+        logger.warning(
+            "Refusing stream %s: the stream token is missing or does not "
+            "belong to this call.",
+            event.stream_sid,
+        )
+        await socket.close(code=POLICY_VIOLATION)
+        return False
+
     try:
         require_supported_format(event)
     except UnsupportedMediaFormat as exc:
@@ -338,9 +412,16 @@ async def _start(
     state.call_sid = event.call_sid
     state.call = call
     state.session = session
-    conversation = Conversation(
-        session, call, build_model(state.settings), state.settings
+    # One turn at a time through the database. `RealtimeSession` starts each
+    # turn in its own task and both reach this session; a guard is what keeps
+    # two of them out of it at once, and what teardown waits on.
+    state.guard = ConversationGuard(
+        conversation=Conversation(
+            session, call, build_model(state.settings), state.settings
+        ),
+        timeout=state.settings.dialogue_timeout_seconds,
     )
+    conversation = state.guard
 
     if state.settings.realtime_enabled:
         state.realtime = RealtimeSession(
@@ -367,6 +448,23 @@ async def _start(
     if greeting is not None:
         await _send_audio(socket, state, greeting)
     return True
+
+
+def _stream_token_ok(socket: WebSocket, state: StreamState, event: StartEvent) -> bool:
+    """Does this socket carry the token minted for this call?
+
+    Checked only when signatures are being checked. That switch is off for
+    replaying captured requests locally — where there is no auth token to
+    sign with — and cannot be off in production, which `app/preflight.py`
+    enforces at boot.
+    """
+    if not state.settings.validate_twilio_signature:
+        return True
+    return stream_token.is_valid(
+        state.settings.twilio_auth_token,
+        event.call_sid,
+        socket.query_params.get("token"),
+    )
 
 
 async def _media(socket: WebSocket, state: StreamState, event: MediaEvent) -> None:

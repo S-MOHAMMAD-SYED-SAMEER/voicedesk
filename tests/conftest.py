@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.session import reset_engine
+from app.runtime import reset_admission
 from app.main import create_app
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,11 +30,13 @@ def settings_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("VOICEDESK_ENVIRONMENT", "test")
     get_settings.cache_clear()
     reset_engine()
+    reset_admission()
     try:
         yield
     finally:
         get_settings.cache_clear()
         reset_engine()
+        reset_admission()
 
 
 @pytest.fixture

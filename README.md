@@ -126,12 +126,11 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 to 9 are implemented. Milestone 10 is not started.**
-Milestone 8 here is the specification's *Cost tracking* section and milestone
-9 its *Evals* section; post-call SMS or email confirmation is not built.
-Everything
-above this line is the specification; everything below describes only what
-exists today.
+**Milestones 1 to 10 are implemented.** Milestone 8 here is the
+specification's *Cost tracking* section, milestone 9 its *Evals* section, and
+milestone 10 is production readiness; post-call SMS or email confirmation is
+not built. Everything above this line is the specification; everything below
+describes only what exists today.
 
 ### What milestone 1 built
 
@@ -1105,13 +1104,13 @@ Run with `python -m app.evals` on a clean checkout:
 
 ```
 Scenarios: 18
-Passed: 17
-Failed: 1
-Task success: 94.4% (17/18)
+Passed: 18
+Failed: 0
+Task success: 100.0% (18/18)
 
 Hallucinated availability: 0
 
-Tool correctness: 100.0% (25/25)
+Tool correctness: 100.0% (26/26)
 
 Escalation:
   precision: 4/4 (100.0%)
@@ -1127,36 +1126,62 @@ Cost:
   unpriced calls: 18
 ```
 
-So: **VoiceDesk's deterministic m9-v1 behavioural suite achieved 94.4% task
+So: **VoiceDesk's deterministic m9-v1 behavioural suite achieves 100% task
 success with zero hallucinated availability.** That is a statement about this
 system under these eighteen scripted scenarios. It is not a statement about
 Claude, and the specification's ≥85% target was written about a suite driven
 by a real model, which this is not.
 
-Eighteen scenarios is a small sample. One failure moves task success by 5.6
-points, and every percentile in the report is marked *arithmetic, not
+Eighteen scenarios is a small sample. One failure would move task success by
+5.6 points, and every percentile in the report is marked *arithmetic, not
 evidence* because with five completed bookings that is exactly what it is.
 
-### The one failure, which the suite found rather than avoided
+Milestone 9 scored 94.4%: `reschedule_conflict` failed, because it had found
+a real defect. Milestone 10 fixed the defect. **No scenario, expectation or
+ground truth was altered to raise the number** — `tests/test_evals_isolation.py`
+pins `app/evals/` against the milestone-8 commit, and the only thing that
+changed is the one line of `CalendarService._write` described below.
 
-`reschedule_conflict` fails, and it should.
+### The defect the suite found, and what it actually was
 
 A caller asks to move an appointment onto a slot somebody else holds. The
 calendar refuses it correctly — the exclusion constraint does its job and
-nothing invalid is written. But `CalendarService._write` rolls back its
-savepoint while leaving the appointment object carrying the times the database
-just refused, so the **next** flush repeats the same UPDATE and violates the
-constraint again. In a real call that means the tool reports the failure
-correctly and then the transcript write blows up: the caller hears nothing.
+nothing invalid is written — and then every later statement on that session
+failed. The tool reported the conflict, and the transcript write, the
+`ended_at` write and the cost row all blew up behind it. The caller heard
+nothing and the rest of the call was dead.
 
-This is frozen milestone-2/3 behaviour and milestone 9 does not repair it —
-an evaluation suite measures the system it is given. It is reproducible with
-milestone 1–4 code alone, and `tests/test_evals_cli.py` asserts it, so the day
-it is fixed the suite will say so.
+**The milestone-9 explanation of why was wrong, and the real one is worse.**
+That explanation said the savepoint rolled back but left the appointment
+object carrying the times the database had just refused, so the next flush
+repeated the same UPDATE. Measured against PostgreSQL, the object is fine:
+after the rollback it is expired and restored, `inspect(appointment).modified`
+is `False`, and it is not in `session.dirty`. The savepoint does exactly what
+a savepoint is for.
 
-The existing tool test for this path asserts the returned result and never
-commits afterwards, which is why the defect had gone unnoticed since milestone
-3. That is the whole argument for having an evaluation suite.
+What breaks is the transaction around it. A failed `flush()` deactivates the
+enclosing `SessionTransaction` — not the savepoint, the outer one — and
+SQLAlchemy then refuses every subsequent statement with `PendingRollbackError`
+until somebody calls `rollback()`. Nothing did. That is why the damage reached
+so far past the calendar: it was never about the appointment at all.
+
+It also explains the asymmetry nobody had noticed. A refused **booking**
+leaves the session perfectly usable, because a failed INSERT of a pending
+object does not deactivate anything. A refused **reschedule** poisons it,
+because the UPDATE is of a persistent object. The insert path was tested; the
+update path was not.
+
+The fix is one `self._session.rollback()` in `CalendarService._write`, on the
+`IntegrityError` path, before the error is translated into `SlotUnavailable`.
+The domain error, its message and its `slot_taken` payload are unchanged.
+`tests/test_calendar_recovery.py` asserts the recovery at four layers — the
+calendar, the tool, the conversation and the cost recorder — because a fix in
+one of them is not a fix for a call.
+
+The tool test that had covered this path asserted the returned result and
+never committed afterwards, which is why the defect survived from milestone 3
+to milestone 9 unnoticed. That is the whole argument for having an evaluation
+suite.
 
 ### Unverified reschedules: measured, not counted
 
@@ -1262,9 +1287,316 @@ script rather than the system.
 | D17 | 16 categories; no `CONFIRMATION_FAILURE` | Confirmation is not independently observable, so a metric for it could not fail honestly |
 | D18 | Every ratio prints its denominator; empty ones read `N/A` | With 18 scenarios a bare percentage invites a confidence nobody earned |
 
+### What milestone 10 built
+
+Production readiness. No new capability: the same system, with the ways it
+could fail in front of a caller closed off one at a time.
+
+```
+boot        preflight ─► refuse to start on a misconfigured production
+per call    admission ─► refuse past the limit, refuse while draining
+            stream token ─► refuse a socket that was not handed one
+in a call   guard ─► one thread at a time in the session
+            timeouts ─► every outbound boundary has a clock
+shutdown    drain ─► stop taking calls, wait a bounded while, let go
+```
+
+- `app/preflight.py` — configuration checked at boot, in production only.
+  Every problem is reported at once, by variable name; no value is ever
+  quoted. Outside production nothing is required at all.
+- `app/runtime.py` — the admission counter, draining, and the conversation
+  guard.
+- `app/api/ready.py` — `GET /ready`: the database and the migration revision.
+  It calls no provider.
+- `app/logging.py` — `text` or `json`, level from configuration.
+- `app/telephony/stream_token.py` — the credential that binds a media socket
+  to the call it belongs to.
+- `app/providers/streaming.py` — an idle clock between messages on a
+  streaming socket.
+- `app/retention.py` — `python -m app.retention`, the one command that
+  deletes.
+- `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `requirements.txt`.
+
+One behavioural fix, described above: the single `self._session.rollback()`
+in `CalendarService._write` that makes a refused reschedule survivable. It is
+the defect the milestone-9 evaluation found, and fixing it took the suite from
+17/18 to 18/18 without a scenario being touched.
+
+### The two probes
+
+`GET /health` is liveness and is unchanged: it touches nothing, so an
+orchestrator never restarts a working process because PostgreSQL blinked.
+
+`GET /ready` is readiness, and answers a different question — should this
+process be sent a call?
+
+```json
+{"status": "ready",
+ "database":   {"ok": true, "detail": "reachable"},
+ "migrations": {"ok": true, "detail": "at head (11bc87a6af66)"},
+ "draining": false,
+ "active_calls": 0}
+```
+
+It is `503` when the database is unreachable, when the schema is behind the
+revision this build expects, or while the process is draining. It deliberately
+**calls no provider**: a readiness probe that depended on somebody else's rate
+limit would take every replica out of rotation at once, for a reason that has
+nothing to do with whether this service works.
+
+### What production refuses to start without
+
+With `VOICEDESK_ENVIRONMENT=production`:
+
+| Variable | Why |
+|---|---|
+| `VOICEDESK_DATABASE_URL` | Must not be the development default. That default carries a well-known password on localhost, and a deployment that forgets to set one should fail at boot rather than quietly connect to it |
+| `VOICEDESK_ANTHROPIC_API_KEY` | There is no offline language model. Speech has an offline substitute that is real code; the model does not |
+| `VOICEDESK_DEBUG=false` | Debug echoes every statement, including names, numbers and transcripts |
+| `VOICEDESK_TWILIO_AUTH_TOKEN` | When telephony is on: it is what a webhook signature and a stream token are checked against |
+| `VOICEDESK_PUBLIC_BASE_URL` | When telephony is on: the address the carrier is told to stream to |
+| `VOICEDESK_VALIDATE_TWILIO_SIGNATURE=true` | When telephony is on. It cannot be turned off in production at all |
+
+`VOICEDESK_TWILIO_ACCOUNT_SID` is deliberately **not** required: nothing in
+the application reads it. A required-variable list with a variable in it that
+does not matter teaches operators to skim the list.
+
+Every problem is reported in one failure, by name, with no value quoted — one
+variable per restart is a bad way to fix a deployment.
+
+**Nothing is required anywhere else.** A fresh clone, the 1,653-test suite and
+`python -m app.evals` all run offline with no credential, and
+`tests/test_production_config.py` asserts both halves of that: what production
+demands, and what nothing else may be made to demand.
+
+### The stream token
+
+The webhook is signed. The WebSocket upgrade that follows it is not, and the
+carrier offers nothing to sign it with — so until this milestone the only
+thing between a stranger and a conversation was that `_start` refuses a
+`CallSid` it has no row for, which is a guess away from being satisfied.
+
+So the webhook mints a token, puts it in the `<Stream>` URL, and the socket
+checks it:
+
+```
+v1.<expiry>.<base64url HMAC-SHA256( "v1.<CallSid>.<expiry>" ) keyed by the Twilio auth token>
+```
+
+* **Bound to one call.** The `CallSid` is inside the signed payload, so a
+  token minted for one call cannot attach to another.
+* **Short-lived.** The expiry is inside the payload too, so it cannot be moved
+  without the key. Five minutes by default; a carrier connects in seconds.
+* **Nothing new to keep.** It is an HMAC under a secret this process already
+  has. No store, no cleanup, nothing to get out of step across replicas.
+* **Never logged.** Not on success, not on refusal, not in an error, and it is
+  compared with `hmac.compare_digest`.
+
+It is checked only when signature validation is on. That switch exists for
+replaying captured requests locally, where there is no auth token to sign
+with — and production cannot set it, because the preflight refuses to start.
+The webhook signature check itself is **unchanged**: no part of it was relaxed
+to make any of this testable.
+
+### The limits, and why each number
+
+| Setting | Default | Why |
+|---|---|---|
+| `MAX_CONCURRENT_CALLS` | 10 | Each call holds one connection for its whole length and the pool is 5 + 10 overflow. Past the limit a call is refused with close code 1013 — a busy signal beats waiting on a connection that is not coming |
+| `MAX_CALL_SECONDS` | 3600 | A socket nobody closed must not hold a connection for ever. Ended with close code 1000, so the carrier can tell an ended call from a dropped one |
+| `MAX_WEBHOOK_BYTES` | 64 KiB | A voice webhook is a few hundred bytes of form data. Over the limit is `413`, before the body is parsed |
+| `MAX_STREAM_FRAME_BYTES` | 128 KiB | A media frame is 20 ms of µ-law in base64. An oversized frame is logged and ignored — one bad frame must not end a caller's call |
+| `SHUTDOWN_GRACE_SECONDS` | 20 | Long enough to finish a sentence and hear the answer |
+
+There is **no rate limiting** and no per-caller quota. That belongs in front of
+this process, and pretending otherwise would be worse than saying so.
+
+### Timeouts, and the thread that cannot be killed
+
+Every outbound boundary now has a clock: the model request (the SDK's own
+default is minutes), both streaming sockets on connect, both streaming sockets
+between messages, and the database connection (without one, a database that is
+not there costs the operating system's TCP timeout, with a caller listening).
+
+The idle clock is **between messages, not around the stream**. A synthesiser
+sending audio steadily is working however long the reply is; one that has sent
+nothing for the idle timeout has stopped, whatever it intends to do later. The
+`TimeoutError` becomes each adapter's own "unavailable" error, so a provider
+that goes quiet fails exactly like one that disconnects — through a handler
+that already existed.
+
+**What a timeout does not do.** The dialogue turn is synchronous and runs on a
+worker thread through `anyio.to_thread.run_sync(..., abandon_on_cancel=True)`.
+Cancelling it ends the *wait*. The thread keeps running, finishes its request
+into nothing, and Python offers no way to kill it. Milestone 7 said so about
+barge-in; it is just as true here, and nothing in this milestone changed it.
+
+That limitation is the reason for two things that look like over-engineering:
+
+* `ConversationGuard` — one lock, two problems. A caller who talks again
+  before the first reply is finished puts two threads into one `Session`,
+  which is not thread-safe; and teardown needs a way to wait until nobody is
+  inside. `RealtimeSession` was not touched: the guard is duck-typed and
+  exposes only `send`.
+* `close_when_idle` — when the wait runs out with a thread still inside, the
+  session is **left open** and logged as an error, not closed. A leaked
+  connection that the collector returns later is a smaller problem than a
+  closed session another thread is still writing through.
+
+### Shutdown
+
+On `SIGTERM` the lifespan stops accepting calls, waits up to the grace period
+for the ones in progress, and lets the engine go. If the period expires with
+calls still running it says so plainly and stops anyway. It waits; it cannot
+end them.
+
+Readiness turns `503` the moment draining starts, so an orchestrator stops
+sending calls before the process stops answering them.
+
+### Errors, and what a caller is told
+
+An unhandled exception returns a reference and nothing else:
+
+```json
+{"detail": "Internal Server Error", "reference": "4f2a9c1b8e07"}
+```
+
+The full traceback goes to the log beside that reference. A stack trace on the
+wire tells an attacker the shape of the system and a database error tells them
+its schema; an operator holding a complaint needs one line, and this is how
+they find it.
+
+`/docs`, `/redoc` and `/openapi.json` are served in development and closed in
+production. So is `GET /harness` and its socket — an unauthenticated page that
+spends model budget and writes real rows. `harness_enabled` cannot re-open it
+in production; the switch exists so a shared staging deployment can close it
+too.
+
+### Logging
+
+There was no logging configuration at all before this milestone: three dozen
+`logger.*` calls reaching stderr through Python's last-resort handler, with no
+timestamp, level or module. Now there is one, in `text` or `json`, at a
+configured level. **No log line was added, removed or reworded to fit it.**
+
+What never appears in a log: a transcript, a caller name, a telephone number,
+a tool argument, an API key, a stream token or a database URL. What does: call
+identifiers, provider and tool names, latencies, generation numbers, and
+exception text from the adapters. Enough to diagnose a call; not enough to
+read one. `tests/test_logging.py` parses every `logger.*` call in `app/` and
+fails on an argument that mentions any of the former.
+
+There is no metrics endpoint, no tracing and no Prometheus. `python -m
+app.metrics` reports latency percentiles from the rows `turns` already has.
+
+### Deployment
+
+```bash
+docker build -t voicedesk .
+docker compose up --build        # postgres, migrate once, then serve
+```
+
+The image is `python:3.13-slim` (override `PYTHON_IMAGE` for a mirror),
+dependencies from the pinned `requirements.txt` then the application itself
+with `--no-deps`, running as a non-root user with UID 10001. Nothing is
+written to disk at run time, so the filesystem can be read-only. No secret is
+baked in. The `HEALTHCHECK` uses `/health`, not `/ready`, so a container is not
+killed because a dependency blinked, and `CMD` is exec form so Uvicorn is PID 1
+and receives `SIGTERM` directly — which is what starts the drain.
+
+**Migrations are a deployment step, not a startup step.**
+
+```bash
+alembic upgrade head      # once, before the new version starts
+```
+
+They are deliberately not run from the application: replicas would race the
+same DDL, and a failed migration would take a running service down with it.
+`/ready` is what notices a process running ahead of its schema.
+
+`requirements.txt` is a `pip freeze` of the virtualenv the suite and the
+evaluation ran in. Nothing was upgraded for this milestone and no dependency
+was added — `pyproject.toml` is unchanged since milestone 8.
+
+### Retention is the deployer's decision
+
+VoiceDesk keeps full transcripts, caller names and telephone numbers, because
+the specification asks it to. **How long is not this tool's decision and it
+invents no default.**
+
+```bash
+python -m app.retention --older-than 90            # reports, deletes nothing
+python -m app.retention --older-than 90 --confirm  # deletes
+```
+
+`--older-than` is required, nothing goes without `--confirm`, and deletion is
+by call rather than by table: rows go one at a time through the ORM so the
+schema's own cascades run. There is no `TRUNCATE` in it and no statement that
+could empty anything.
+
+What goes with a call: its `turns`, their `tool_calls`, its `call_costs`. What
+does not: its `appointments`. `appointments.call_id` is `ON DELETE SET NULL`
+because a booking outlives the conversation that made it — deleting a
+transcript must not cancel somebody's haircut. An appointment keeps its own
+`customer_name` and `phone`, so **erasing a person completely is more than
+this command does**. Counts are logged; names, numbers and transcripts are
+not.
+
+There is no scheduler. Run it from cron, or from whatever the deployment
+already uses.
+
+### What has and has not actually been proved
+
+Proved, by tests that ran: the preflight refuses each missing variable and
+requires nothing outside production; the harness and the documentation are
+absent in production; an unhandled error returns a reference and no detail;
+readiness reports a real migrated database, a real unmigrated one, and a
+draining process; a stream token binds to its call and expires; an oversized
+webhook is `413` and an oversized frame is stepped over; the eleventh
+concurrent call is refused; a call past its limit is closed; a streaming
+socket that goes quiet fails as unavailable; draining waits and then stops;
+retention deletes what it says and keeps what it says.
+
+Proved by running the process, not only the suite: started with
+`VOICEDESK_ENVIRONMENT=production` it refuses to boot on the development
+database URL and on a missing model key, naming both in one failure; started
+with them set it serves `/health` and `/ready` and answers `404` to `/harness`,
+`/docs`, `/redoc` and `/openapi.json`; and `SIGTERM` drains and logs
+`Drained cleanly` before the process exits.
+
+Not proved: anything about a real deployment. No container has run under an
+orchestrator, no `SIGTERM` has arrived from Kubernetes, no real carrier has
+connected to a token-bearing stream URL, and no provider timeout has fired
+against a real provider. The Docker gate for this milestone was
+**environment-blocked**: the Docker client is installed where this was built
+but no daemon is reachable, so `docker build` and `docker compose up` were
+never executed. The image is asserted by reading the Dockerfile —
+`tests/test_packaging.py` checks the user, the command form, the health check
+and the absence of any credential — not by building it.
+
+### Decisions recorded in milestone 10
+
+| # | Decision | Why |
+|---|---|---|
+| D1 | One `rollback()` in `CalendarService._write`, and no change to the error it raises | The defect was the deactivated transaction, not the appointment object; the domain contract was already right |
+| D2 | Preflight applies in `production` only | Requiring a key outside it would have broken the offline-by-default posture the whole repository rests on |
+| D3 | `twilio_account_sid` is not required | Nothing reads it, and a list with a pointless entry teaches people to skim |
+| D4 | The stream token reuses the Twilio auth token as its key | A new secret means a new thing to distribute, rotate and get out of step across replicas |
+| D5 | The token is checked only when signatures are | The two switches describe the same situation — a real carrier, or a local replay — and splitting them would have meant one of them was wrong |
+| D6 | Admission is a plain counter with no lock | It is touched only from the event loop; a lock would be theatre |
+| D7 | The guard is duck-typed on `send` | `RealtimeSession` and `VoiceSession` both ask a conversation for exactly that, so neither had to change |
+| D8 | `close_when_idle` declines rather than closes | A leaked connection is recoverable; a session closed under a live thread is not |
+| D9 | An hour, ten calls, 64 KiB, 128 KiB | Each is roughly two orders of magnitude above what the thing it bounds actually is |
+| D10 | Migrations never run from application startup | Replicas racing the same DDL is a worse failure than a process that will not serve |
+| D11 | `/ready` calls no provider | One vendor's rate limit must not take every replica out of rotation |
+| D12 | No rate limiting | It belongs in front of this process, and a token bucket here would look like protection without being it |
+| D13 | Retention has no default age | How long a business may keep a recording of a customer is a legal question about that business |
+| D14 | `requirements.txt` from `pip freeze`, nothing upgraded | A hardening milestone that also moved twelve versions would be two milestones |
+| D15 | Docker gate marked environment-blocked | No daemon was available; claiming a build that never ran is the one thing worse than not running it |
+
 ### Deliberately not built yet
 
-No outbound calling, SMS, email, actual transfer or deployment. **No billing:** there is no Stripe, no invoice, no subscription,
+No outbound calling, SMS, email or actual transfer. **No billing:** there is no Stripe, no invoice, no subscription,
 no quota, no customer account and no payment processing, and none is coming.
 Milestone 8 is accounting — writing down what was used — and nothing else.
 
@@ -1281,8 +1613,9 @@ connecting the caller to a person is not implemented.
 
 There is **no dialogue API and no booking API**: the calendar core, the tool
 layer and the dialogue layer are libraries. The HTTP surface is `GET /health`,
-`GET /harness` and `POST /telephony/voice`, plus two sockets — `WS /ws/harness`
-and `WS /telephony/stream`.
+`GET /ready`, `GET /harness` and `POST /telephony/voice`, plus two sockets —
+`WS /ws/harness` and `WS /telephony/stream`. In production the harness is
+absent and so is the documentation surface.
 
 `AppointmentStatus` has two values, `booked` and `cancelled`: `reschedule`
 moves an existing booking's times and leaves it `booked`, so it is not a third
@@ -1302,8 +1635,15 @@ createdb -O voicedesk voicedesk_test     # the test suite migrates and drops thi
 
 alembic upgrade head
 uvicorn app.main:app --reload
-curl localhost:8000/health
+curl localhost:8000/health          # liveness: touches nothing
+curl localhost:8000/ready           # readiness: database + migration state
 pytest
+```
+
+Or in containers, with PostgreSQL and the migration step included:
+
+```bash
+docker compose up --build
 ```
 
 **The browser harness.** With the server running, open
@@ -1331,7 +1671,8 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (576 pass, 495 skip). With a database: 1071 pass.
+one (1,052 pass, 601 skip). With a database: **1,653 pass**, and no credential
+is needed for either.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing
