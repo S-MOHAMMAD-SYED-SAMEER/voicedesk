@@ -594,3 +594,84 @@ def db_session(session):
     needs a different name in those files.
     """
     return session
+
+
+# --- cost fixtures --------------------------------------------------------
+
+# Invented for arithmetic, not copied from anybody's price list. They are
+# deliberately round and deliberately wrong: no vendor charges these, and the
+# point of every assertion below is the calculation, not the number.
+FICTIONAL_LLM_INPUT_USD_PER_MTOK = "1"
+FICTIONAL_LLM_OUTPUT_USD_PER_MTOK = "4"
+FICTIONAL_STT_USD_PER_MINUTE = "0.12"
+FICTIONAL_TTS_USD_PER_MCHAR = "500"
+
+
+@pytest.fixture
+def cost_settings(calendar_settings):
+    """Cost tracking on, and not one price configured."""
+    return calendar_settings.model_copy(update={"cost_tracking_enabled": True})
+
+
+@pytest.fixture
+def priced_settings(cost_settings):
+    """Cost tracking on, with the fictional prices above."""
+    return cost_settings.model_copy(
+        update={
+            "llm_input_usd_per_mtok": FICTIONAL_LLM_INPUT_USD_PER_MTOK,
+            "llm_output_usd_per_mtok": FICTIONAL_LLM_OUTPUT_USD_PER_MTOK,
+            "stt_usd_per_minute": FICTIONAL_STT_USD_PER_MINUTE,
+            "tts_usd_per_mchar": FICTIONAL_TTS_USD_PER_MCHAR,
+        }
+    )
+
+
+def spoke(
+    text: str = "I'd like to book an appointment",
+    *,
+    audio_ms: int | None = 1500,
+    provider_name: str = "offline",
+):
+    """A `Transcript` that reports how much audio it was given."""
+    from app.providers.stt import Transcript
+
+    return Transcript(
+        text=text,
+        confidence=0.9,
+        audio_ms=audio_ms,
+        latency_ms=5,
+        provider_name=provider_name,
+    )
+
+
+def used(input_tokens: int | None, output_tokens: int | None, *, text: str = "Sure."):
+    """A scripted plain-text response that reports token usage."""
+    from app.providers.llm import ModelResponse
+
+    return ModelResponse(
+        text=text,
+        stop_reason="end_turn",
+        raw_content=[{"type": "text", "text": text}],
+        model_name="fake-model-1",
+        latency_ms=12,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+def cost_rows(session, call_id):
+    """Every cost row for one call, oldest first, as a component-keyed dict."""
+    from sqlalchemy import select
+
+    from app.models import CallCost
+
+    rows = (
+        session.execute(
+            select(CallCost)
+            .where(CallCost.call_id == call_id)
+            .order_by(CallCost.created_at)
+        )
+        .scalars()
+        .all()
+    )
+    return {row.component: row for row in rows}

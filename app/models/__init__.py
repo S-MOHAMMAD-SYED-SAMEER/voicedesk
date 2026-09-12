@@ -11,6 +11,7 @@ from app.models.appointment import (
 )
 from app.models.business_hours import BusinessHours
 from app.models.call import Call, CallDirection, CallOutcome, ToolCall, Turn, TurnRole
+from app.models.call_cost import CallCost, CostComponent
 from app.models.service import Service
 
 __all__ = [
@@ -19,8 +20,10 @@ __all__ = [
     "AppointmentStatus",
     "BusinessHours",
     "Call",
+    "CallCost",
     "CallDirection",
     "CallOutcome",
+    "CostComponent",
     "Service",
     "ToolCall",
     "Turn",

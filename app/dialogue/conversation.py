@@ -34,7 +34,7 @@ from app.dialogue.errors import ToolLoopExhausted
 from app.dialogue.executor import ToolCallRecord, ToolExecutor
 from app.dialogue.prompt import SYSTEM_PROMPT_VERSION, build_system_prompt
 from app.models import Call, ToolCall, Turn, TurnRole
-from app.providers.llm import LanguageModel, Message, ModelError
+from app.providers.llm import LanguageModel, Message, ModelError, ModelResponse
 from app.tools import ToolContext
 
 # Said when the system cannot answer. Fixed strings, because a model that has
@@ -66,6 +66,43 @@ class DialogueResult:
     # exist for them. Nothing in this package reads them back.
     caller_turn_id: uuid.UUID | None = None
     agent_turn_id: uuid.UUID | None = None
+    # What the model reported using, summed over every request this turn made
+    # — a turn that went round the tool loop four times paid for four
+    # requests. Null when the provider reported nothing, which is not the
+    # same as nothing having been used, so a null must never become a zero.
+    # Nothing here knows what a token costs; that is somebody else's module.
+    model_name: str = ""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+class TokenTotals:
+    """What one caller turn's model requests reported using.
+
+    A turn is one reply but may be several requests, and every one of them is
+    paid for — including the ones that only asked for a tool, and including
+    the ones made before the loop ran out. So they are added up.
+
+    Null stays null. A provider that reported nothing has told us nothing, and
+    a zero would say it used nothing. The two must not look the same.
+    """
+
+    def __init__(self) -> None:
+        self.model_name = ""
+        self.input_tokens: int | None = None
+        self.output_tokens: int | None = None
+
+    def add(self, response: ModelResponse) -> None:
+        if response.model_name:
+            self.model_name = response.model_name
+        self.input_tokens = _add(self.input_tokens, response.input_tokens)
+        self.output_tokens = _add(self.output_tokens, response.output_tokens)
+
+
+def _add(total: int | None, reported: int | None) -> int | None:
+    if reported is None:
+        return total
+    return reported if total is None else total + reported
 
 
 class Conversation:
@@ -110,10 +147,11 @@ class Conversation:
 
         records: list[ToolCallRecord] = []
         latencies: list[int] = []
+        tokens = TokenTotals()
         failed = False
 
         try:
-            reply = self._run(records, latencies)
+            reply = self._run(records, latencies, tokens)
         except ModelError:
             reply, failed = MODEL_FAILURE_REPLY, True
         except ToolLoopExhausted:
@@ -132,15 +170,24 @@ class Conversation:
             llm_latency_ms=latency_ms,
             caller_turn_id=caller_turn_id,
             agent_turn_id=agent_turn_id,
+            model_name=tokens.model_name,
+            input_tokens=tokens.input_tokens,
+            output_tokens=tokens.output_tokens,
         )
 
-    def _run(self, records: list[ToolCallRecord], latencies: list[int]) -> str:
+    def _run(
+        self,
+        records: list[ToolCallRecord],
+        latencies: list[int],
+        tokens: TokenTotals,
+    ) -> str:
         """The model/tool loop, to a final reply or an exception.
 
         Both exits are failures the caller turn can survive: a `ModelError`
         from the provider, or `ToolLoopExhausted` when the model keeps asking
-        for tools. `records` and `latencies` are filled as it goes, so a turn
-        that ends either way still has a transcript to write.
+        for tools. `records`, `latencies` and `tokens` are filled as it goes,
+        so a turn that ends either way still has a transcript to write and
+        still reports what the requests it did make consumed.
         """
         for _ in range(self._settings.max_tool_iterations):
             response = self._model.respond(
@@ -149,6 +196,7 @@ class Conversation:
                 tools=self._tools,
             )
             latencies.append(response.latency_ms or 0)
+            tokens.add(response)
             self._history.append(
                 Message(role="assistant", content=response.raw_content)
             )

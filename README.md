@@ -126,7 +126,9 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 to 7 are implemented. Milestones 8–10 are not started.** Everything
+**Milestones 1 to 8 are implemented. Milestones 9 and 10 are not started.**
+Milestone 8 here is the specification's *Cost tracking* section; post-call
+SMS or email confirmation is not built. Everything
 above this line is the specification; everything below describes only what
 exists today.
 
@@ -893,10 +895,157 @@ establishes real carrier behaviour, real latency, real transcription accuracy,
 real voice quality or production readiness, and no such claim is made anywhere
 in this repository.
 
+### What milestone 8 built
+
+Cost tracking: what each call consumed, recorded per component, and priced
+only where somebody has supplied a price.
+
+```
+turn finishes ─► app/cost/recorder.py ─► call_costs (llm, stt, tts)
+call ends     ─► app/cost/recorder.py ─► call_costs (telephony)
+                                              │
+                                              └─► calls.total_cost_usd
+```
+
+* `app/models/call_cost.py` — the `call_costs` table: one row per component
+  per turn, plus one per call for the line. Usage in named units, an optional
+  per-unit price, an optional cost, and a JSONB `metadata` column recording
+  what was measured and why anything is unpriced.
+* `app/cost/usage.py` — vendor-neutral usage records. Tokens, milliseconds of
+  audio, characters, milliseconds of line time. No prices anywhere in it.
+* `app/cost/pricing.py` — the only module that knows a price.
+* `app/cost/recorder.py` — the only module that writes a cost row or touches
+  `calls.total_cost_usd`.
+* One migration, `11bc87a6af66`. The two existing migrations are untouched.
+
+Token counts now travel out of the dialogue layer on `DialogueResult`
+(`model_name`, `input_tokens`, `output_tokens`), summed across every model
+request one caller turn made — a turn that went round the tool loop four times
+paid for four requests. Both session objects carry the speech usage they
+measured (`stt_provider`, `stt_audio_ms`, `tts_provider`, `tts_characters`).
+Neither layer knows what any of it costs; the transports hand the numbers to
+the cost recorder, beside the latency writer from milestone 7.
+
+### VoiceDesk ships no prices
+
+This is the milestone's central decision and it is not a limitation to be
+fixed later without thought.
+
+**The built-in pricing table contains no vendor price and never should.** Not
+Anthropic's, not Deepgram's, not ElevenLabs', not Twilio's. Prices change,
+this repository cannot check them, and a stale number baked into source is
+worse than no number: it would be quoted as a fact for as long as it survived.
+
+So a price comes from configuration or from nowhere:
+
+```bash
+export VOICEDESK_COST_TRACKING_ENABLED=true
+export VOICEDESK_LLM_INPUT_USD_PER_MTOK=...    # from your own account
+export VOICEDESK_LLM_OUTPUT_USD_PER_MTOK=...
+export VOICEDESK_STT_USD_PER_MINUTE=...
+export VOICEDESK_TTS_USD_PER_MCHAR=...
+```
+
+Blank means **unpriced**, which is not the same as free. An unpriced component
+is stored with its usage and a null `cost_usd`, and a call with any unpriced
+component has a null `total_cost_usd` — a partial total looks exactly like a
+complete one and would be read as a complete one.
+
+The one thing the shipped table does contain is the `offline` providers, at
+exactly zero. That is not a guess about anybody's price list: the offline
+transcriber and synthesiser are a fixed sentence and a tone written in this
+repository, and they buy nothing. Configuration cannot override that.
+
+Malformed configuration fails at startup rather than one swallowed exception
+at a time: `create_app()` parses the prices when cost tracking is on, and a
+price that is not a number, is negative, or is large enough to only be a
+misplaced decimal point stops the process.
+
+### What these numbers are and are not
+
+They are what VoiceDesk measured, multiplied by what an operator said things
+cost. **They are not a bill, and they will not match one.** Specifically:
+
+* **The line is never priced.** What this code can measure is the wall-clock
+  window in which a media stream was open. What a carrier bills is its own
+  record of the call, rounded up to whole units, which this process never
+  sees. The duration is recorded with `unit_type = "duration_ms"` and no rate,
+  so as it stands **a telephone call has no `total_cost_usd` at all**. That is
+  the honest consequence of not pricing something we cannot measure, and it is
+  asserted in the tests rather than left as a surprise.
+* **Cache tokens are not measured.** The provider response this repository
+  reads does not expose cache reads or writes, so a cached prompt is priced as
+  though it were not cached — an over-count, in the direction of a larger bill
+  than the real one.
+* **Streaming recognition under-counts.** `audio_ms` comes from the transcript
+  results, not from how long the connection was open, and a streaming
+  recogniser is usually billed for the latter.
+* **A greeting is not accounted for.** It is synthesised before anybody has
+  spoken, so there is no turn row to attach it to, and inventing one would put
+  a sentence in the transcript that nobody said.
+* **A turn the model never saw records nothing.** When a caller says nothing
+  recognisable the model is deliberately not asked, so no turn rows are
+  written — and a cost row hangs off a turn. The recognition and synthesis
+  that did happen are not recorded.
+* **Sub-microdollar amounts round to zero.** `cost_usd` is `Numeric(10, 6)`.
+
+The specification asks for "cost per call and cost per completed booking" in
+this README as the sales argument. **No such figure is given here, because
+none has been earned:** no external service has ever been called from this
+code, so there is no usage from a real call to price, and no price to apply to
+it. The machinery to produce that number exists and is tested; the number
+does not.
+
+### Counting characters once
+
+`SpeechChunk.characters` is a trap worth naming. Both streaming synthesisers
+in this repository — ElevenLabs and offline — report the **whole** text length
+on **every** chunk, and so do the fakes in the tests. A layer that
+summed them would multiply the bill by the number of chunks: a hundred
+characters delivered in ten chunks would be recorded as a thousand.
+
+So the realtime session counts once, from the text it handed to the
+synthesiser, before the first chunk comes back. `tests/test_cost_integration.py`
+and `tests/test_realtime_session.py` both drive a ten-chunk stream of a
+hundred-character reply and assert the recorded figure is 100.
+
+### Recording twice records once
+
+Cost rows are keyed by `(turn_id, component)` with a unique index, so a
+retried write updates the row it already made rather than doubling a call's
+spend. PostgreSQL treats nulls in a unique index as distinct, which would let
+a second telephony row through, so a **partial** unique index on
+`(call_id, component) WHERE turn_id IS NULL` covers exactly the rows the first
+one cannot reach. Both are asserted directly against the database.
+
+`calls.total_cost_usd` is recomputed with a single aggregate over
+`call_costs` — never by adding to whatever the column happened to hold.
+Read-modify-write on a column two turns can finish at the same time is how
+totals drift.
+
+### Decisions recorded in milestone 8
+
+| # | Decision | Why |
+|---|---|---|
+| D1 | Configuration-only pricing; the shipped table holds no vendor price | This environment cannot verify any vendor's current prices, and a stale one in source would be quoted as a fact |
+| D2 | Blank price means unpriced, not zero; a numeric setting would default to 0.0 | Pricing every call at nothing by accident is the one failure nobody would notice |
+| D3 | One unpriced component nulls the whole call's total | A partial total is indistinguishable from a complete one |
+| D4 | The offline providers are priced at exactly zero, and configuration cannot change it | They are this repository's own code and buy nothing; that is a fact, not a price |
+| D5 | Telephony is recorded unpriced, always | Measured stream time is not the carrier's billed time, and pricing it would produce a number that looked like a bill |
+| D6 | `unit_price_usd` is null for a model row, with both rates in `metadata` | One column cannot honestly hold two rates |
+| D7 | Rates are stored per single unit, quantised before use | So `cost_usd = unit_price_usd × units` is checkable in SQL, not only in Python |
+| D8 | Recognition is recorded against the caller's turn; the model and synthesis against the reply | The same split the milestone-7 latency writer already uses |
+| D9 | Cost tracking is off by default | A fresh clone behaves exactly as it did through milestone 7 |
+| D10 | Prices are validated at application start, not at first use | A malformed price should stop a deployment, not quietly disable accounting |
+| D11 | `Decimal` and `Numeric` throughout; floats are refused by `Usage` | Money computed from a float is wrong eventually and silently |
+| D12 | One new migration; the existing two are untouched | A new table, altering nothing, is safe against a populated database |
+
 ### Deliberately not built yet
 
-No outbound calling, SMS, email, actual transfer, cost computation, scenario
-evals or deployment.
+No outbound calling, SMS, email, actual transfer, scenario evals or
+deployment. **No billing:** there is no Stripe, no invoice, no subscription,
+no quota, no customer account and no payment processing, and none is coming.
+Milestone 8 is accounting — writing down what was used — and nothing else.
 
 **No external service has ever been called from this code, and no telephone
 call has ever been placed.** Every test injects a scripted model and scripted
@@ -961,7 +1110,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (474 pass, 398 skip). With a database: 872 pass.
+one (576 pass, 495 skip). With a database: 1071 pass.
 
 VoiceDesk is a separate application from DocIntel in this repository: its own
 package, dependencies, virtualenv, configuration prefix and database. Nothing

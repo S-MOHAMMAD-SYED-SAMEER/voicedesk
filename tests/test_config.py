@@ -70,11 +70,11 @@ def test_settings_are_cached(settings_env: None) -> None:
 
 
 def test_no_future_milestone_settings_exist() -> None:
-    """Messaging, cost and evaluation configuration belong to later milestones.
+    """Messaging and evaluation configuration belong to later milestones.
 
     The model settings arrived with milestone 4, the speech providers with
-    milestone 5 and the carrier with milestone 6. Nothing yet configures SMS,
-    email, cost accounting or the evaluation suite.
+    milestone 5, the carrier with milestone 6 and cost tracking with milestone
+    8. Nothing yet configures SMS, email or the evaluation suite.
     """
     fields = set(Settings.model_fields)
 
@@ -83,8 +83,49 @@ def test_no_future_milestone_settings_exist() -> None:
         for field in fields
         if any(
             token in field
-            for token in ("calendar", "sms", "email", "cost", "eval", "outbound")
+            for token in ("calendar", "sms", "email", "eval", "outbound")
         )
+    }
+
+
+def test_the_only_cost_settings_are_the_approved_ones() -> None:
+    """The guard above used to forbid the word "cost" outright.
+
+    It no longer can, so it is replaced by an exact list: cost tracking is one
+    switch and four prices, and nothing has crept in beside them.
+    """
+    named = {
+        field
+        for field in Settings.model_fields
+        if "cost" in field or "usd" in field
+    }
+
+    assert named == {
+        "cost_tracking_enabled",
+        "llm_input_usd_per_mtok",
+        "llm_output_usd_per_mtok",
+        "stt_usd_per_minute",
+        "tts_usd_per_mchar",
+    }
+
+
+def test_cost_tracking_is_off_and_every_price_is_unset() -> None:
+    """A fresh clone records no cost rows and asserts no price."""
+    settings = Settings(_env_file=None)
+
+    assert settings.cost_tracking_enabled is False
+    assert settings.llm_input_usd_per_mtok == ""
+    assert settings.llm_output_usd_per_mtok == ""
+    assert settings.stt_usd_per_minute == ""
+    assert settings.tts_usd_per_mchar == ""
+
+
+def test_no_setting_configures_a_telephony_price() -> None:
+    """Measured stream time is not what a carrier bills, so it is not priced."""
+    assert not {
+        field
+        for field in Settings.model_fields
+        if "telephony" in field and ("usd" in field or "price" in field)
     }
 
 

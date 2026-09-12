@@ -157,6 +157,30 @@ class Settings(BaseSettings):
     # --- Interruption ---
     barge_in_enabled: bool = True
 
+    # --- Cost ---
+    # Off by default: with it false nothing writes a cost row and
+    # `calls.total_cost_usd` stays null, exactly as it has been since
+    # milestone 1.
+    cost_tracking_enabled: bool = False
+    # Prices are strings, and empty means unpriced. This is the whole of
+    # VoiceDesk's pricing: it ships no vendor prices and never infers one, so
+    # a component nobody has priced is recorded with its usage and a null
+    # cost. A numeric field defaulting to 0.0 would price every call at
+    # nothing, which is the one answer that must never be given by accident.
+    #
+    # They are quoted in the units vendors quote in — per million tokens, per
+    # minute, per million characters — and converted to per-unit rates in
+    # `app/cost/pricing.py`. One price per component: if the model or the
+    # speech provider changes, the price has to change with it, because
+    # nothing here notices that it did not.
+    llm_input_usd_per_mtok: str = ""
+    llm_output_usd_per_mtok: str = ""
+    stt_usd_per_minute: str = ""
+    tts_usd_per_mchar: str = ""
+    # There is deliberately no telephony price. What this system can measure
+    # is how long a media stream was open; what a carrier bills is its own
+    # record of the call, rounded up, which this process never sees.
+
     @field_validator("stt_streaming_provider")
     @classmethod
     def _known_streaming_stt(cls, value: str) -> str:

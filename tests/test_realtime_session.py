@@ -363,3 +363,169 @@ async def test_finishing_with_nothing_said_does_nothing(
     await session.finish()
 
     assert model.call_count == 0
+
+
+# --- what a turn consumed (milestone 8) -----------------------------------
+
+
+class _RepeatingChunks:
+    """A synthesiser whose every chunk claims the whole character count.
+
+    Which is what all three streaming implementations in this repository do.
+    """
+
+    CHUNKS = 10
+
+    def __init__(self) -> None:
+        from app.providers.speech import PCM_S16LE, AudioFormat
+
+        self._format = AudioFormat(PCM_S16LE, 8000, 1, "raw")
+        self.spoken: list[str] = []
+
+    def stream(self, text: str, voice: str | None = None):
+        self.spoken.append(text)
+        return _RepeatingStream(text, self._format)
+
+
+class _RepeatingStream:
+    def __init__(self, text: str, audio_format) -> None:
+        self._text = text
+        self._format = audio_format
+
+    async def chunks(self):
+        from app.providers.streaming_tts import SpeechChunk
+
+        for index in range(_RepeatingChunks.CHUNKS):
+            yield SpeechChunk(
+                audio=b"\x00\x00" * 80,
+                format=self._format,
+                is_final=index == _RepeatingChunks.CHUNKS - 1,
+                characters=len(self._text),
+                metadata={"provider": "elevenlabs"},
+            )
+
+    async def aclose(self) -> None:
+        return None
+
+
+REPLY_100 = "y" * 100
+
+
+@pytest.mark.anyio
+async def test_characters_are_counted_once_not_once_per_chunk(
+    realtime, open_weekdays, haircut: Service
+) -> None:
+    """Ten chunks of a hundred characters is a hundred characters."""
+    session, _ = realtime(say(REPLY_100), tts=_RepeatingChunks())
+
+    await _say_something(session)
+
+    assert session.turns[-1].tts_characters == 100
+
+
+@pytest.mark.anyio
+async def test_the_character_count_is_the_text_the_synthesiser_was_given(
+    realtime, open_weekdays, haircut: Service
+) -> None:
+    session, _ = realtime(say("Short."))
+
+    await _say_something(session)
+
+    assert session.turns[-1].tts_characters == len("Short.")
+
+
+@pytest.mark.anyio
+async def test_a_turn_records_who_synthesised_it(
+    realtime, open_weekdays, haircut: Service
+) -> None:
+    session, _ = realtime(say(REPLY_100), tts=_RepeatingChunks())
+
+    await _say_something(session)
+
+    assert session.turns[-1].tts_provider == "elevenlabs"
+
+
+@pytest.mark.anyio
+async def test_a_turn_records_the_audio_the_recogniser_was_given(
+    realtime, open_weekdays, haircut: Service
+) -> None:
+    session, _ = realtime(say("Of course."))
+
+    await _say_something(session)
+
+    turn = session.turns[-1]
+    assert turn.stt_provider == "offline"
+    assert turn.stt_audio_ms is not None
+
+
+@pytest.mark.anyio
+async def test_recognition_is_recorded_even_when_nothing_was_said(
+    realtime, open_weekdays, haircut: Service
+) -> None:
+    """Somebody was still paid to listen to the silence."""
+    from app.providers.streaming_stt import FinalTranscript
+
+    class _HeardNothing:
+        def stream(self, audio_format):
+            return _EmptyStream()
+
+    class _EmptyStream:
+        async def send(self, audio: bytes) -> None:
+            return None
+
+        async def finish(self) -> None:
+            return None
+
+        async def events(self):
+            yield FinalTranscript(
+                text="   ", audio_ms=1200, provider_name="deepgram"
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    session, _ = realtime(say("Unused."), stt=_HeardNothing())
+
+    await _say_something(session)
+
+    turn = session.turns[-1]
+    assert turn.failure == "empty"
+    assert turn.stt_audio_ms == 1200
+    assert turn.stt_provider == "deepgram"
+
+
+@pytest.mark.anyio
+async def test_a_failed_synthesis_still_records_the_characters_it_was_given(
+    realtime, open_weekdays, haircut: Service
+) -> None:
+    """A provider that dies mid-reply was still handed the whole text."""
+
+    class _Broken:
+        def stream(self, text: str, voice: str | None = None):
+            return _BrokenStream()
+
+    class _BrokenStream:
+        async def chunks(self):
+            raise VoiceUnavailable("gone")
+            yield  # pragma: no cover - unreachable, makes this a generator
+
+        async def aclose(self) -> None:
+            return None
+
+    session, _ = realtime(say(REPLY_100), tts=_Broken())
+
+    await _say_something(session)
+
+    assert session.turns[-1].tts_characters == 100
+
+
+@pytest.mark.anyio
+async def test_the_realtime_session_puts_no_price_on_any_of_it(
+    realtime, open_weekdays, haircut: Service
+) -> None:
+    session, _ = realtime(say("Of course."))
+
+    await _say_something(session)
+
+    turn = session.turns[-1]
+    assert not [field for field in vars(turn) if "cost" in field or "usd" in field]

@@ -15,7 +15,7 @@ from app.dialogue import (
 from app.models import Appointment, Service
 from app.providers.llm import ModelRefused, ModelUnavailable
 
-from .conftest import FakeModel, say, use_tools
+from .conftest import FakeModel, say, use_tools, used
 
 MONDAY = "2026-03-02"
 TEN = "2026-03-02T10:00:00+00:00"
@@ -311,3 +311,109 @@ def test_latency_is_summed_across_every_model_call_in_a_turn(
     result = conversation.send("Monday?")
 
     assert result.llm_latency_ms == 65
+
+
+# --- what the model reported using (milestone 8) --------------------------
+
+
+def test_a_turn_reports_the_tokens_the_model_said_it_used(
+    dialogue, open_weekdays, haircut
+) -> None:
+    conversation = dialogue(used(1000, 200))
+
+    result = conversation.send("Hello")
+
+    assert result.input_tokens == 1000
+    assert result.output_tokens == 200
+    assert result.model_name == "fake-model-1"
+
+
+def test_a_turn_that_used_several_requests_adds_them_up(
+    dialogue, open_weekdays, haircut
+) -> None:
+    """One reply can be several requests, and every one of them is paid for."""
+    asking = use_tools(
+        ("check_availability", {"service_name": "Haircut", "date": "2026-03-02"})
+    )
+    conversation = dialogue(
+        _with_usage(asking, 500, 50), used(700, 80, text="We have 9am free.")
+    )
+
+    result = conversation.send("Anything on Monday?")
+
+    assert result.input_tokens == 1200
+    assert result.output_tokens == 130
+
+
+def test_a_model_that_reported_nothing_leaves_the_counts_null(
+    dialogue, open_weekdays, haircut
+) -> None:
+    """Null is "we were not told", which is not "nothing was used"."""
+    conversation = dialogue(say("Certainly."))
+
+    result = conversation.send("Hello")
+
+    assert result.input_tokens is None
+    assert result.output_tokens is None
+
+
+def test_a_zero_token_report_is_kept_as_zero(dialogue, open_weekdays, haircut) -> None:
+    conversation = dialogue(used(0, 0))
+
+    result = conversation.send("Hello")
+
+    assert result.input_tokens == 0
+    assert result.output_tokens == 0
+
+
+def test_a_turn_whose_model_failed_still_reports_nothing_rather_than_zero(
+    dialogue, open_weekdays, haircut
+) -> None:
+    from app.providers.llm import ModelError
+
+    conversation = dialogue(raises=ModelError("down"))
+
+    result = conversation.send("Hello")
+
+    assert result.failed is True
+    assert result.input_tokens is None
+
+
+def test_a_turn_that_ran_out_of_iterations_still_reports_what_it_spent(
+    dialogue, open_weekdays, haircut, calendar_settings
+) -> None:
+    """The requests it did make were paid for, loop or no loop."""
+    settings = calendar_settings.model_copy(update={"max_tool_iterations": 2})
+    asking = use_tools(
+        ("check_availability", {"service_name": "Haircut", "date": "2026-03-02"})
+    )
+    conversation = dialogue(
+        _with_usage(asking, 100, 10),
+        _with_usage(asking, 100, 10),
+        settings=settings,
+    )
+
+    result = conversation.send("Anything on Monday?")
+
+    assert result.failed is True
+    assert result.input_tokens == 200
+    assert result.output_tokens == 20
+
+
+def test_the_dialogue_layer_puts_no_price_on_any_of_it(
+    dialogue, open_weekdays, haircut
+) -> None:
+    conversation = dialogue(used(1000, 200))
+
+    result = conversation.send("Hello")
+
+    assert not [field for field in vars(result) if "cost" in field or "usd" in field]
+
+
+def _with_usage(response, input_tokens: int, output_tokens: int):
+    """The same scripted response, with token usage attached."""
+    import dataclasses
+
+    return dataclasses.replace(
+        response, input_tokens=input_tokens, output_tokens=output_tokens
+    )

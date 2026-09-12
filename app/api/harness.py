@@ -36,6 +36,7 @@ import anyio
 
 from app.audio import AudioError, VoiceSession, VoiceTurn, utterance_from_bytes
 from app.config import Settings, get_settings
+from app.cost import record_turn_cost
 from app.db.session import get_sessionmaker
 from app.dialogue import Conversation
 from app.models import Call, CallDirection
@@ -45,6 +46,7 @@ from app.providers.factory import (
     build_streaming_tts,
     build_stt,
     build_tts,
+    model_provider_name,
 )
 from app.providers.streaming_stt import PartialTranscript
 from app.providers.streaming_tts import SpeechChunk
@@ -135,7 +137,7 @@ async def harness_socket(socket: WebSocket) -> None:
                     await socket.send_bytes(greeting.audio)
 
                 await _converse(
-                    socket, voice, realtime, settings, str(call.id), call
+                    socket, session, voice, realtime, settings, str(call.id), call
                 )
                 turns.cancel_scope.cancel()
         except WebSocketDisconnect:
@@ -160,6 +162,7 @@ def _build_realtime(
     async def on_turn(turn: RealtimeTurn) -> None:
         if turn.dialogue is not None:
             record_latency(session, turn.dialogue, turn.timing)
+            _record_cost(session, turn, settings)
         await socket.send_json(_realtime_message(turn))
 
     return RealtimeSession(
@@ -176,6 +179,7 @@ def _build_realtime(
 
 async def _converse(
     socket: WebSocket,
+    session: Session,
     voice: VoiceSession,
     realtime: RealtimeSession,
     settings: Settings,
@@ -238,11 +242,31 @@ async def _converse(
             await _error(socket, "turn_failed", f"{type(exc).__name__}: {exc}")
             continue
 
+        if turn.dialogue is not None:
+            _record_cost(session, turn, settings)
+
         # JSON first, then the audio it describes, always in that order, so
         # the browser never has to guess what a binary frame belongs to.
         await socket.send_json(_turn_message(turn))
         if turn.speech is not None:
             await socket.send_bytes(turn.speech.audio)
+
+
+def _record_cost(session: Session, turn, settings: Settings) -> None:
+    """Write what this turn consumed, beside what it took.
+
+    Both paths reach this: a press-to-talk `VoiceTurn` and a realtime
+    `RealtimeTurn` carry the same four usage fields, so one call serves both.
+    Off unless `cost_tracking_enabled` says otherwise, and best effort either
+    way — a call is not worth failing over an accounting row.
+    """
+    record_turn_cost(
+        session,
+        turn.dialogue,
+        turn,
+        settings,
+        llm_provider=model_provider_name(settings),
+    )
 
 
 def _realtime_message(turn: RealtimeTurn) -> dict[str, object]:

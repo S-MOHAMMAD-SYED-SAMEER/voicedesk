@@ -13,7 +13,7 @@ from app.providers.speech import read_wav
 from app.providers.stt import SpeechUnavailable, Transcript
 from app.providers.tts import VoiceUnavailable
 
-from .conftest import FakeModel, FakeSTT, FakeTTS, say, use_tools
+from .conftest import FakeModel, FakeSTT, FakeTTS, say, spoke, use_tools
 
 MONDAY = "2026-03-02"
 TEN = "2026-03-02T10:00:00+00:00"
@@ -354,3 +354,85 @@ def test_a_greeting_that_cannot_be_spoken_is_not_fatal(
     audio_session = voice(model=FakeModel(), tts=FakeTTS(raises=VoiceUnavailable("x")))
 
     assert audio_session.greeting("Thanks for calling.") is None
+
+
+# --- what a turn consumed (milestone 8) -----------------------------------
+
+
+def test_a_turn_reports_the_audio_the_recogniser_was_given(
+    voice, utterance, open_weekdays, haircut: Service
+) -> None:
+    session = voice(say("Of course."), stt=FakeSTT(spoke(audio_ms=1500)))
+
+    turn = session.speak(utterance)
+
+    assert turn.stt_audio_ms == 1500
+    assert turn.stt_provider == "offline"
+
+
+def test_a_turn_reports_the_characters_the_synthesiser_was_given(
+    voice, utterance, open_weekdays, haircut: Service
+) -> None:
+    session = voice(say("Of course."))
+
+    turn = session.speak(utterance)
+
+    assert turn.tts_characters == len("Of course.")
+    assert turn.tts_provider == "fake"
+
+
+def test_a_recogniser_that_reported_no_duration_leaves_it_null(
+    voice, utterance, open_weekdays, haircut: Service
+) -> None:
+    """Null is "we were not told", and must not become a zero."""
+    session = voice(say("Of course."), stt=FakeSTT(spoke(audio_ms=None)))
+
+    turn = session.speak(utterance)
+
+    assert turn.stt_audio_ms is None
+
+
+def test_a_turn_that_heard_nothing_still_reports_what_listening_took(
+    voice, utterance, open_weekdays, haircut: Service
+) -> None:
+    session = voice(say("Unused."), stt=FakeSTT(spoke("   ", audio_ms=900)))
+
+    turn = session.speak(utterance)
+
+    assert turn.reply == NOT_HEARD_REPLY
+    assert turn.stt_audio_ms == 900
+
+
+def test_a_broken_recogniser_reports_no_usage_at_all(
+    voice, utterance, open_weekdays, haircut: Service
+) -> None:
+    """Nothing was measured, so nothing is claimed."""
+    session = voice(say("Unused."), stt=FakeSTT(raises=SpeechUnavailable("down")))
+
+    turn = session.speak(utterance)
+
+    assert turn.failure == "stt"
+    assert turn.stt_audio_ms is None
+    assert turn.stt_provider == ""
+
+
+def test_a_broken_synthesiser_reports_no_characters(
+    voice, utterance, open_weekdays, haircut: Service
+) -> None:
+    session = voice(say("Of course."), tts=FakeTTS(raises=VoiceUnavailable("down")))
+
+    turn = session.speak(utterance)
+
+    assert turn.failure == "tts"
+    assert turn.tts_characters is None
+    assert turn.tts_provider == ""
+
+
+def test_the_audio_layer_puts_no_price_on_any_of_it(
+    voice, utterance, open_weekdays, haircut: Service
+) -> None:
+    session = voice(say("Of course."))
+
+    turn = session.speak(utterance)
+
+    assert not [field for field in vars(turn) if "cost" in field or "usd" in field]

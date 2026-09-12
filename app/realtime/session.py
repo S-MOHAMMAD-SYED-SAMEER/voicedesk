@@ -129,6 +129,18 @@ class RealtimeTurn:
     failed: bool = False
     # "stt" | "empty" | "dialogue" | "tts" | None
     failure: str | None = None
+    # What the two speech providers were given, for whoever accounts for it.
+    # Plain numbers: this layer measures and has no idea what any of it costs.
+    #
+    # `tts_characters` is counted **once per stream**, from the text handed to
+    # the synthesiser. Every streaming implementation in this repository
+    # repeats the full character count on every chunk it emits, so adding them
+    # up would multiply the true figure by the number of chunks — a hundred
+    # characters delivered in ten chunks would read as a thousand.
+    stt_provider: str = ""
+    stt_audio_ms: int | None = None
+    tts_provider: str = ""
+    tts_characters: int | None = None
 
 
 class RealtimeSession:
@@ -297,17 +309,23 @@ class RealtimeSession:
             logger.warning("Recognition failed: %s", exc)
             turn.failed, turn.failure = True, "stt"
             turn.reply = SPEECH_FAILURE_REPLY
-            await self._speak(SPEECH_FAILURE_REPLY, generation, turn.timing)
+            await self._speak(
+                SPEECH_FAILURE_REPLY, generation, turn.timing, turn
+            )
             return
 
         if generation.stale:
+            # The transcript is discarded, but recognising it was still paid
+            # for; `_recognise` has already recorded that.
             logger.info("Discarding a transcript from an interrupted turn.")
             return
+
         if final is None or not final.text.strip():
-            # Silence is not a question. The model is not asked about it.
+            # Silence is not a question. The model is not asked about it —
+            # but the recogniser did listen to it, and is billed for it.
             turn.failed, turn.failure = True, "empty"
             turn.reply = NOT_HEARD_REPLY
-            await self._speak(NOT_HEARD_REPLY, generation, turn.timing)
+            await self._speak(NOT_HEARD_REPLY, generation, turn.timing, turn)
             return
 
         turn.transcript = final.text
@@ -333,7 +351,7 @@ class RealtimeSession:
             logger.info("Discarding a reply from an interrupted turn.")
             return
 
-        await self._speak(result.text, generation, turn.timing)
+        await self._speak(result.text, generation, turn.timing, turn)
 
     async def _recognise(
         self, audio: bytes, generation: Generation, turn: RealtimeTurn
@@ -359,6 +377,11 @@ class RealtimeSession:
                 if final is None:
                     final = event
                     turn.timing.stt_final = self._clock()
+                    # Recorded the moment it exists, so an interruption
+                    # afterwards discards the words without also discarding
+                    # the fact that somebody was paid to hear them.
+                    turn.stt_provider = event.provider_name
+                    turn.stt_audio_ms = event.audio_ms
                 else:
                     logger.info("Ignoring a second final transcript.")
         finally:
@@ -368,11 +391,23 @@ class RealtimeSession:
     # --- speaking ----------------------------------------------------------
 
     async def _speak(
-        self, text: str, generation: Generation, timing: TurnTiming
+        self,
+        text: str,
+        generation: Generation,
+        timing: TurnTiming,
+        turn: RealtimeTurn | None = None,
     ) -> None:
         """Synthesise and play, checking on every chunk that it is still wanted."""
         if generation.stale or not text:
             return
+
+        if turn is not None:
+            # Counted here, once, from the text being asked for — not summed
+            # over the chunks that come back. Providers repeat the whole count
+            # on every chunk, so a sum would multiply it. Recorded before the
+            # first chunk arrives because a synthesiser that is cut off
+            # mid-reply has still been given the whole text.
+            turn.tts_characters = len(text)
 
         stream = self._tts.stream(text)
         self._voice_stream = stream
@@ -386,6 +421,8 @@ class RealtimeSession:
                     return
                 if timing.tts_first_audio is None:
                     timing.tts_first_audio = self._clock()
+                if turn is not None and not turn.tts_provider:
+                    turn.tts_provider = str(chunk.metadata.get("provider", ""))
                 await self._sink.send(chunk)
         except VoiceError as exc:
             # The dialogue already happened and is already persisted. It is

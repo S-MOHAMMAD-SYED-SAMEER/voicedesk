@@ -79,3 +79,15 @@ def build_streaming_tts(settings: Settings | None = None) -> StreamingTextToSpee
     from app.providers.offline_streaming import OfflineStreamingTextToSpeech
 
     return OfflineStreamingTextToSpeech(sample_rate=resolved.audio_sample_rate)
+
+
+def model_provider_name(settings: Settings | None = None) -> str:
+    """Who `build_model` would hand back, by name.
+
+    Here rather than anywhere else for the same reason as the builders: this
+    module is where a vendor is chosen, so it is where a vendor is named. A
+    caller that needs to record which vendor answered asks for the name
+    instead of importing the adapter to find out.
+    """
+    del settings  # One model implementation exists; the name does not vary.
+    return "anthropic"

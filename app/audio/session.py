@@ -34,7 +34,7 @@ from app.audio.format import validate_utterance
 from app.config import Settings, get_settings
 from app.dialogue import Conversation, DialogueResult
 from app.providers.speech import Audio
-from app.providers.stt import SpeechError, SpeechToText
+from app.providers.stt import SpeechError, SpeechToText, Transcript
 from app.providers.tts import Speech, TextToSpeech, VoiceError
 
 # Fixed lines, spoken when there is nothing a model should be asked about.
@@ -48,11 +48,15 @@ SPEECH_FAILURE_REPLY = (
 class VoiceTurn:
     """One press-to-talk exchange: what was heard, said, and how long it took.
 
-    The latencies are reported here and written nowhere. `turns.audio_ms`,
-    `stt_latency_ms` and `tts_latency_ms` stay null through milestone 5; the
-    milestone that owns observability fills them, and until then an empty
-    column is more honest than one filled by a layer that had to reach back
-    into rows the dialogue layer had already committed.
+    Nothing here is written to a database by this layer. The latencies and the
+    usage are reported outwards and a transport writes them, which is what
+    keeps the audio layer free of SQL: it measures, and something above it
+    decides what to keep.
+
+    The greeting is deliberately not accounted for. It is synthesised before
+    anybody has said anything, so there is no turn row to attach it to, and
+    inventing one to hold an accounting figure would put a sentence in the
+    transcript that nobody said. It is therefore a small, known under-count.
     """
 
     transcript: str
@@ -66,6 +70,14 @@ class VoiceTurn:
     failed: bool = False
     # "audio" | "stt" | "empty" | "dialogue" | "tts" | None
     failure: str | None = None
+    # What the two speech providers were given, carried for whoever accounts
+    # for it. Plain numbers and plain names: this layer measures, and has no
+    # idea what any of it costs. Null where a provider reported nothing —
+    # never zero, which would claim it was handed nothing at all.
+    stt_provider: str = ""
+    stt_audio_ms: int | None = None
+    tts_provider: str = ""
+    tts_characters: int | None = None
 
 
 class VoiceSession:
@@ -112,6 +124,8 @@ class VoiceSession:
 
         if not transcript.text.strip():
             # Deliberately before the model: silence is not a question.
+            # Nothing was said, but the recogniser still listened to it and
+            # will still be billed for it.
             return self._say(
                 NOT_HEARD_REPLY,
                 started=started,
@@ -119,6 +133,7 @@ class VoiceSession:
                 transcript="",
                 stt_latency_ms=stt_latency_ms,
                 confidence=transcript.confidence,
+                heard=transcript,
             )
 
         result = self._conversation.send(transcript.text)
@@ -133,6 +148,7 @@ class VoiceSession:
             stt_latency_ms=stt_latency_ms,
             confidence=transcript.confidence,
             dialogue=result,
+            heard=transcript,
         )
 
     # --- internals ---------------------------------------------------------
@@ -147,6 +163,7 @@ class VoiceSession:
         stt_latency_ms: int = 0,
         confidence: float | None = None,
         dialogue: DialogueResult | None = None,
+        heard: Transcript | None = None,
     ) -> VoiceTurn:
         """Synthesise the reply, and report honestly if that is all that worked."""
         speech: Speech | None = None
@@ -171,6 +188,12 @@ class VoiceSession:
             confidence=confidence,
             failed=failure is not None,
             failure=failure,
+            stt_provider=heard.provider_name if heard is not None else "",
+            stt_audio_ms=heard.audio_ms if heard is not None else None,
+            tts_provider=speech.provider_name if speech is not None else "",
+            # One number for one request, straight from the provider. The
+            # streaming path has to be more careful; see `app/realtime`.
+            tts_characters=speech.characters if speech is not None else None,
         )
 
 

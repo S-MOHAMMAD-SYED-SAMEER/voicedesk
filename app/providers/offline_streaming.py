@@ -180,7 +180,7 @@ class OfflineVoiceStream:
                 format=self._format,
                 is_final=offset >= total_samples,
                 characters=len(self._text),
-                metadata={"offline": True},
+                metadata={"offline": True, "provider": PROVIDER_NAME},
             )
 
     async def aclose(self) -> None:

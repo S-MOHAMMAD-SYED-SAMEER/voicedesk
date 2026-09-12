@@ -4,6 +4,10 @@
 (`GET /harness` and `WS /ws/harness`), and the milestone-6 telephony adapter
 (`POST /telephony/voice` and `WS /telephony/stream`), which serves nothing
 unless `telephony_enabled` is set.
+
+Configured prices are parsed at startup when cost tracking is on, so a
+malformed one stops the process here rather than being discovered, one
+swallowed exception at a time, halfway through a call.
 """
 
 from fastapi import FastAPI
@@ -16,6 +20,13 @@ from app.telephony import router as telephony_router
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    if settings.cost_tracking_enabled:
+        # Raises `PricingError` on a price that is not a number, is negative,
+        # or is so large it can only be a misplaced decimal point.
+        from app.cost import PriceBook
+
+        PriceBook.from_settings(settings)
+
     app = FastAPI(
         title=settings.app_name,
         version=__version__,

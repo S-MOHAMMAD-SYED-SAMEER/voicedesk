@@ -19,8 +19,10 @@ from app.models import (
     AppointmentStatus,
     BusinessHours,
     Call,
+    CallCost,
     CallDirection,
     CallOutcome,
+    CostComponent,
     Service,
     ToolCall,
     Turn,
@@ -495,3 +497,151 @@ def test_foreign_keys_are_declared(migrated_engine: Engine) -> None:
             for key in inspector.get_foreign_keys(table)
         }
         assert set(pairs) <= actual, table
+
+
+# --- what a call spent (milestone 8) --------------------------------------
+
+
+def _cost(call: Call, **fields) -> CallCost:
+    values = {
+        "call_id": call.id,
+        "component": CostComponent.LLM,
+        "provider": "anthropic",
+        "input_units": Decimal("100"),
+        "unit_type": "tokens",
+    }
+    values.update(fields)
+    return CallCost(**values)
+
+
+def test_a_cost_row_defaults_to_no_price_and_no_cost(session: Session, call) -> None:
+    """Unknown, and visibly so. Not free."""
+    row = _cost(call)
+    session.add(row)
+    session.commit()
+
+    assert row.cost_usd is None
+    assert row.unit_price_usd is None
+
+
+def test_a_cost_row_defaults_to_no_output_units_and_no_metadata(
+    session: Session, call
+) -> None:
+    row = _cost(call)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+
+    assert row.output_units == Decimal("0.000")
+    assert row.details == {}
+
+
+def test_a_cost_row_keeps_six_decimal_places_of_money(
+    session: Session, call
+) -> None:
+    row = _cost(call, cost_usd=Decimal("0.000001"))
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+
+    assert row.cost_usd == Decimal("0.000001")
+
+
+def test_a_unit_price_keeps_twelve_decimal_places(session: Session, call) -> None:
+    """A per-token price is a millionth of a dollar; per-millisecond is less."""
+    row = _cost(call, unit_price_usd=Decimal("0.000000000001"))
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+
+    assert row.unit_price_usd == Decimal("0.000000000001")
+
+
+def test_a_cost_row_may_belong_to_the_whole_call(session: Session, call) -> None:
+    row = _cost(call, component=CostComponent.TELEPHONY, unit_type="duration_ms",
+                provider="twilio")
+    session.add(row)
+    session.commit()
+
+    assert row.turn_id is None
+
+
+def test_a_cost_row_needs_a_call_that_exists(session: Session) -> None:
+    session.add(
+        CallCost(
+            call_id=uuid.uuid4(),
+            component=CostComponent.LLM,
+            provider="anthropic",
+            input_units=Decimal("1"),
+            unit_type="tokens",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
+def test_the_component_enum_exists_in_the_database(migrated_engine: Engine) -> None:
+    with migrated_engine.connect() as connection:
+        values = connection.execute(
+            text(
+                "SELECT enumlabel FROM pg_enum JOIN pg_type ON pg_type.oid = "
+                "enumtypid WHERE typname = 'cost_component' ORDER BY enumsortorder"
+            )
+        ).scalars().all()
+
+    assert values == ["llm", "stt", "tts", "telephony"]
+
+
+def test_the_cost_table_is_indexed_by_call_and_component(
+    migrated_engine: Engine,
+) -> None:
+    names = {
+        index["name"] for index in inspect(migrated_engine).get_indexes("call_costs")
+    }
+
+    assert "ix_call_costs_call_id" in names
+    assert "ix_call_costs_call_id_component" in names
+
+
+def test_the_two_uniqueness_rules_are_indexes_in_the_database(
+    migrated_engine: Engine,
+) -> None:
+    """One per turn and component; one per call and component without a turn."""
+    indexes = {
+        index["name"]: index
+        for index in inspect(migrated_engine).get_indexes("call_costs")
+    }
+
+    assert indexes["uq_call_costs_turn_component"]["unique"] is True
+    assert indexes["uq_call_costs_call_component_without_turn"]["unique"] is True
+
+
+def test_the_call_level_index_is_partial(migrated_engine: Engine) -> None:
+    """Without the `WHERE`, it would forbid a second turn-level row too."""
+    with migrated_engine.connect() as connection:
+        definition = connection.execute(
+            text(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = "
+                "'uq_call_costs_call_component_without_turn'"
+            )
+        ).scalar_one()
+
+    assert "WHERE (turn_id IS NULL)" in definition
+
+
+def test_two_turn_level_rows_for_one_call_are_allowed(
+    session: Session, call
+) -> None:
+    """Which is why the call-level index has to be partial."""
+    first = Turn(call_id=call.id, role=TurnRole.AGENT, text="One")
+    second = Turn(call_id=call.id, role=TurnRole.AGENT, text="Two")
+    session.add_all([first, second])
+    session.commit()
+
+    session.add_all(
+        [_cost(call, turn_id=first.id), _cost(call, turn_id=second.id)]
+    )
+    session.commit()
+
+    assert len(session.execute(select(CallCost)).scalars().all()) == 2

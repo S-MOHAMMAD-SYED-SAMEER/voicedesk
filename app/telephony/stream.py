@@ -50,6 +50,7 @@ from app.audio.telephony import (
     utterance_from_mulaw,
 )
 from app.config import Settings, get_settings
+from app.cost import record_call_cost, record_turn_cost
 from app.db.session import get_sessionmaker
 from app.dialogue import Conversation
 from app.models import Call, CallDirection
@@ -59,6 +60,7 @@ from app.providers.factory import (
     build_streaming_tts,
     build_stt,
     build_tts,
+    model_provider_name,
 )
 from app.providers.streaming_tts import SpeechChunk
 from app.realtime import RealtimeSession, RealtimeTurn
@@ -84,6 +86,9 @@ router = APIRouter(tags=["telephony"])
 
 GREETING = "Thanks for calling. How can I help?"
 POLICY_VIOLATION = 1008
+# Who carried the call, for the accounting row. The name of the carrier, not
+# of its SDK: nothing here imports one.
+CARRIER_NAME = "twilio"
 BYTES_PER_MS = TELEPHONY_SAMPLE_RATE // 1000
 
 
@@ -210,14 +215,23 @@ class StreamState:
     def close(self) -> None:
         """Record that the call ended, and let the database connection go.
 
-        Only `ended_at`. `outcome` and `total_cost_usd` stay null — summarising
-        a call belongs to the milestone that owns post-call reporting.
+        `ended_at`, and then how long the line was open. `outcome` stays null
+        — summarising how a call went belongs to the milestone that owns
+        post-call reporting. `total_cost_usd` is left to the cost recorder,
+        which will only fill it in if every component of the call was priced;
+        the line never is, so on a telephone call it stays null by design.
         """
         if self.session is not None:
             try:
                 if self.call is not None:
                     self.call.ended_at = datetime.now(UTC)
                     self.session.commit()
+                    # Measured duration, recorded unpriced. What a carrier
+                    # bills is its own record of the call, rounded up, which
+                    # this process never sees.
+                    record_call_cost(
+                        self.session, self.call, CARRIER_NAME, self.settings
+                    )
             except Exception:  # pragma: no cover - cleanup must not mask errors
                 logger.exception("Could not record the end of call %s", self.call_sid)
                 self.session.rollback()
@@ -402,6 +416,9 @@ async def _record_latency(state: StreamState, turn: RealtimeTurn) -> None:
     The dialogue layer wrote those rows and returned their ids; it cannot know
     how long the caller spoke or how long recognition took. Best effort: a
     call is not worth failing over a metric.
+
+    What the turn consumed is written here too, by the one module allowed to
+    write a cost row. Off unless `cost_tracking_enabled` says otherwise.
     """
     result = turn.dialogue
     if result is None or state.session is None:
@@ -409,6 +426,20 @@ async def _record_latency(state: StreamState, turn: RealtimeTurn) -> None:
     from app.realtime.latency import record
 
     record(state.session, result, turn.timing)
+    _record_cost(state, turn)
+
+
+def _record_cost(state: StreamState, turn) -> None:
+    """What one turn consumed, for whichever of the two paths produced it."""
+    if state.session is None or turn.dialogue is None:
+        return
+    record_turn_cost(
+        state.session,
+        turn.dialogue,
+        turn,
+        state.settings,
+        llm_provider=model_provider_name(state.settings),
+    )
 
 
 async def _turn(socket: WebSocket, state: StreamState, mulaw: bytes) -> None:
@@ -428,6 +459,8 @@ async def _turn(socket: WebSocket, state: StreamState, mulaw: bytes) -> None:
     except Exception:  # noqa: BLE001 - one bad turn must not end the call
         logger.exception("A turn failed on call %s", state.call_sid)
         return
+
+    _record_cost(state, turn)
 
     if turn.speech is not None:
         await _send_audio(socket, state, turn.speech)
