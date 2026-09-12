@@ -126,9 +126,10 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 to 8 are implemented. Milestones 9 and 10 are not started.**
-Milestone 8 here is the specification's *Cost tracking* section; post-call
-SMS or email confirmation is not built. Everything
+**Milestones 1 to 9 are implemented. Milestone 10 is not started.**
+Milestone 8 here is the specification's *Cost tracking* section and milestone
+9 its *Evals* section; post-call SMS or email confirmation is not built.
+Everything
 above this line is the specification; everything below describes only what
 exists today.
 
@@ -1040,10 +1041,230 @@ totals drift.
 | D11 | `Decimal` and `Numeric` throughout; floats are refused by `Usage` | Money computed from a float is wrong eventually and silently |
 | D12 | One new migration; the existing two are untouched | A new table, altering nothing, is safe against a populated database |
 
+### What milestone 9 built
+
+A deterministic evaluation suite: eighteen scripted calls, run against the real
+system, scored against structured ground truth.
+
+```
+scenario → world → ScriptedModel → Conversation → tools → CalendarService → PostgreSQL
+                                                              ↓
+                                       trace → checks → findings → report
+```
+
+```bash
+python -m app.evals                       # every scenario
+python -m app.evals --list                # names only, runs nothing
+python -m app.evals --scenario booking_available --scenario take_message
+python -m app.evals --json report.json    # machine-readable as well as text
+python -m app.evals --fail-under 85       # exit 1 below that task success
+python -m app.evals --quiet               # the headline only
+```
+
+* `app/evals/scenario.py` — scenarios and expectations as frozen dataclasses.
+  Ground truth is structured: expected tools and their arguments, forbidden
+  tools, declared availability claims, the exact final state of
+  `appointments`. Nothing is prose a human has to interpret.
+* `app/evals/model.py` — a `LanguageModel` that answers from a script.
+* `app/evals/world.py` — services, hours and seeded appointments, seeded
+  **through `CalendarService`** so a fixture the application could not have
+  produced is refused.
+* `app/evals/runner.py` — one scenario, from an empty database to a trace.
+* `app/evals/checks.py` — the only place a verdict is reached.
+* `app/evals/scoring.py`, `report.py` — the numbers, and the sentences around
+  them.
+* `app/evals/database.py` — the `_evals` safety boundary.
+* `app/evals/dataset/` — the eighteen scenarios.
+
+No migration, no new dependency, no HTTP endpoint, no dashboard. One
+production file changed: `app/config.py` gained `eval_database_url`.
+
+### What the evaluation measures, and what it does not
+
+**It measures VoiceDesk.** Given a set of model outputs, does the system call
+the right tool with the right arguments, refuse what it should refuse, escalate
+when the scenario says it should, and leave the database in the right state?
+Everything below the model is the real thing — the dialogue layer, the
+executor and its offered-slot guard, all six tools, `CalendarService`, and the
+database's exclusion constraint. Four scenarios are adversarial: they try to
+book an unverified slot, book a slot another caller has just taken, book with
+no name, and book a service that does not exist. Each passes only if the
+refusal happened and the database is unchanged.
+
+**It does not measure Claude.** The model here says what the scenario told it
+to say. It has no judgement to assess, makes no mistakes and cannot be
+surprised, so no number this suite produces is evidence about a real model's
+conversational quality — nor about Deepgram's accuracy, ElevenLabs' voices or
+a carrier's behaviour. Nothing in `app/evals/` calls any of them and no
+credential is needed to run it. There is no LLM-as-judge anywhere in it, and
+there should never be one.
+
+### Results under m9-v1
+
+Run with `python -m app.evals` on a clean checkout:
+
+```
+Scenarios: 18
+Passed: 17
+Failed: 1
+Task success: 94.4% (17/18)
+
+Hallucinated availability: 0
+
+Tool correctness: 100.0% (25/25)
+
+Escalation:
+  precision: 4/4 (100.0%)
+  recall: 4/4 (100.0%)
+
+Unverified reschedules: 1
+
+Turns to booking:
+  p50: 2   p95: 2   (count 5 — arithmetic, not evidence)
+
+Cost:
+  measured calls: 0
+  unpriced calls: 18
+```
+
+So: **VoiceDesk's deterministic m9-v1 behavioural suite achieved 94.4% task
+success with zero hallucinated availability.** That is a statement about this
+system under these eighteen scripted scenarios. It is not a statement about
+Claude, and the specification's ≥85% target was written about a suite driven
+by a real model, which this is not.
+
+Eighteen scenarios is a small sample. One failure moves task success by 5.6
+points, and every percentile in the report is marked *arithmetic, not
+evidence* because with five completed bookings that is exactly what it is.
+
+### The one failure, which the suite found rather than avoided
+
+`reschedule_conflict` fails, and it should.
+
+A caller asks to move an appointment onto a slot somebody else holds. The
+calendar refuses it correctly — the exclusion constraint does its job and
+nothing invalid is written. But `CalendarService._write` rolls back its
+savepoint while leaving the appointment object carrying the times the database
+just refused, so the **next** flush repeats the same UPDATE and violates the
+constraint again. In a real call that means the tool reports the failure
+correctly and then the transcript write blows up: the caller hears nothing.
+
+This is frozen milestone-2/3 behaviour and milestone 9 does not repair it —
+an evaluation suite measures the system it is given. It is reproducible with
+milestone 1–4 code alone, and `tests/test_evals_cli.py` asserts it, so the day
+it is fixed the suite will say so.
+
+The existing tool test for this path asserts the returned result and never
+commits afterwards, which is why the defect had gone unnoticed since milestone
+3. That is the whole argument for having an evaluation suite.
+
+### Unverified reschedules: measured, not counted
+
+`ToolExecutor` refuses any `book_appointment` for a time no successful
+`check_availability` returned. It does not guard `reschedule`, and the
+milestone-4 prompt asks only that a *booking* be checked first — so a
+reschedule to a time the caller was never offered is the system working as
+built.
+
+The suite reconstructs the offered-slot ledger from the trace and reports
+every such move as `UNVERIFIED_RESCHEDULE`. It is **non-blocking**: it never
+counts against task success, because failing a scenario for behaving exactly
+as designed would make the score meaningless. `reschedule_success` therefore
+passes and carries one observation, and the report explains it in place.
+
+### How hallucinated availability is detected
+
+Three layers, none of which asks a model anything.
+
+1. **Structural.** A successful `book_appointment` for a `(service, instant)`
+   the ledger does not contain. The executor's guard should make this
+   unreachable; the suite asserts that it stays unreachable rather than
+   assuming it.
+2. **Declared claims.** Each scenario declares, per turn, the times its
+   scripted replies tell the caller are free. Each is checked against the
+   ledger **as it stood on that turn** — a prefix, because offering a time
+   later does not excuse claiming it earlier.
+3. **Undeclared claims.** A deliberately narrow detector reads agent replies
+   for unambiguous clock times (`10:00`, `3pm`) and never for words like
+   "ten" or "half nine". Anything it finds that is neither offered nor
+   declared produces `UNDECLARED_CLAIM`. Its job is to catch a scenario author
+   who wrote a time and forgot to declare it — it never decides on its own
+   what a sentence means. It is unit-tested in both directions.
+
+The dataset is written to suit that discipline: a reply names a numeric time
+only when that time was actually offered, and says "that time has gone" in
+words when it was not, because the detector cannot tell the two apart and
+should not be asked to.
+
+### The evaluation database
+
+The suite creates, migrates and truncates whatever it is pointed at, so it
+refuses outright to touch a database whose name does not end in `_evals`. The
+check runs on the resolved name — configured or derived — and again
+immediately before the only statement that deletes anything.
+
+`VOICEDESK_EVAL_DATABASE_URL` names it; left blank, one is derived by
+appending `_evals` to `database_url`, so a fresh clone runs the suite against
+`voicedesk_evals` with nothing configured. There is no path through
+`app/evals/database.py` that reaches the development database.
+
+### Cost, inherited from milestone 8
+
+The runner calls the same public recorder a transport calls. Nothing about
+pricing is added or changed.
+
+A text evaluation buys no speech, so no STT or TTS row is written — an empty
+provider name writes nothing, rather than a zero that would claim a provider
+had been asked and charged nothing. The model rows record the provider as
+`scripted`, never a vendor, so nobody reading `call_costs` from an evaluation
+run could mistake them for real spending.
+
+With no prices configured — the default — all eighteen calls report as
+**unpriced**, which means no price was supplied, not that they were free.
+Configure `VOICEDESK_LLM_INPUT_USD_PER_MTOK` and its output counterpart and
+the suite reports measured costs for the scripted token counts instead.
+
+### Failure taxonomy
+
+`WRONG_TOOL`, `MISSING_TOOL`, `INVALID_TOOL_ARGUMENT`,
+`HALLUCINATED_AVAILABILITY`, `UNVERIFIED_RESCHEDULE`, `UNDECLARED_CLAIM`,
+`MISSED_ESCALATION`, `UNNECESSARY_ESCALATION`, `BOOKING_FAILURE`,
+`RESCHEDULE_FAILURE`, `CANCELLATION_FAILURE`, `DUPLICATE_ACTION`,
+`UNEXPECTED_ACTION`, `TURN_LIMIT`, `PROVIDER_FAILURE`, `SCRIPT_EXHAUSTED`.
+
+All block a scenario except `UNVERIFIED_RESCHEDULE`. `SCRIPT_EXHAUSTED` blocks
+but is reported separately as a **scenario-authoring** failure: a half-written
+scenario must never be scored as the receptionist misbehaving. There is no
+`CONFIRMATION_FAILURE`, because whether the caller agreed before a booking is
+a conversation rather than a fact, and with a scripted model it would test the
+script rather than the system.
+
+### Decisions recorded in milestone 9
+
+| # | Decision | Why |
+|---|---|---|
+| D1 | Scenarios are frozen dataclasses in `app/evals/dataset/`, not YAML | Type-checked, greppable, and they reuse `ModelResponse` directly; a parser would be a dependency and a second failure mode |
+| D2 | Ground truth is structured, never prose | Every verdict has to name what was expected and what happened |
+| D3 | The trace is in memory and reuses `ToolCallRecord` | A second representation would eventually disagree with the first, invisibly |
+| D4 | Task success is "no blocking finding" | One rule, mechanically checkable, always reported with the finding that broke it |
+| D5 | Tool correctness shows all five counts beside the percentage | The specification's wrong-tool-call rate needs a visible numerator |
+| D6 | Three hallucination layers, no LLM, regex only for undeclared claims | The regex never classifies a hallucination; it catches an undeclared scenario |
+| D7 | `UNVERIFIED_RESCHEDULE` is measured and non-blocking | Frozen behaviour, reported rather than punished |
+| D8 | 18 scenarios: 16 text, 2 realtime | The specification asks for ≥15 and names the families |
+| D9 | Scripted model; everything below it real | Reproducible, and it exercises the real guard, tools, calendar and constraint |
+| D10 | `python -m app.evals`, shaped after `python -m app.metrics` | One reporting idiom in the repository; no HTTP, no dashboard |
+| D11 | One `EVAL_SUITE_VERSION` constant, `m9-v1` | Bumped when a definition changes, not when a scenario is added |
+| D12 | Cost through milestone 8's existing recorder, provider `scripted` | No second cost system, and no row that looks like real spending |
+| D13 | Both realtime scenarios included | Barge-in and silence are only observable above `Conversation` |
+| D14 | No evaluation table; the trace never persists | The system under test writes its own rows; the measurement does not |
+| D15 | No migration | Everything needed is already in the schema or in `DialogueResult` |
+| D16 | Zero new dependencies | `argparse`, `statistics`, `dataclasses`, `json`, `decimal` are stdlib |
+| D17 | 16 categories; no `CONFIRMATION_FAILURE` | Confirmation is not independently observable, so a metric for it could not fail honestly |
+| D18 | Every ratio prints its denominator; empty ones read `N/A` | With 18 scenarios a bare percentage invites a confidence nobody earned |
+
 ### Deliberately not built yet
 
-No outbound calling, SMS, email, actual transfer, scenario evals or
-deployment. **No billing:** there is no Stripe, no invoice, no subscription,
+No outbound calling, SMS, email, actual transfer or deployment. **No billing:** there is no Stripe, no invoice, no subscription,
 no quota, no customer account and no payment processing, and none is coming.
 Milestone 8 is accounting — writing down what was used — and nothing else.
 

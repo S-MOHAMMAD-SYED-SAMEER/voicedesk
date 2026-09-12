@@ -70,22 +70,36 @@ def test_settings_are_cached(settings_env: None) -> None:
 
 
 def test_no_future_milestone_settings_exist() -> None:
-    """Messaging and evaluation configuration belong to later milestones.
+    """Messaging configuration belongs to a later milestone.
 
     The model settings arrived with milestone 4, the speech providers with
-    milestone 5, the carrier with milestone 6 and cost tracking with milestone
-    8. Nothing yet configures SMS, email or the evaluation suite.
+    milestone 5, the carrier with milestone 6, cost tracking with milestone 8
+    and the evaluation database with milestone 9. Nothing yet configures SMS
+    or email.
     """
     fields = set(Settings.model_fields)
 
     assert not {
         field
         for field in fields
-        if any(
-            token in field
-            for token in ("calendar", "sms", "email", "eval", "outbound")
-        )
+        if any(token in field for token in ("calendar", "sms", "email", "outbound"))
     }
+
+
+def test_the_only_evaluation_setting_is_the_database() -> None:
+    """The guard above used to forbid the word "eval" outright.
+
+    Milestone 9 adds exactly one evaluation setting and no others: the suite
+    is a command, not a configurable subsystem.
+    """
+    named = {field for field in Settings.model_fields if "eval" in field}
+
+    assert named == {"eval_database_url"}
+
+
+def test_the_evaluation_database_is_unset_by_default() -> None:
+    """Blank, so one is derived from `database_url` rather than guessed at."""
+    assert Settings(_env_file=None).eval_database_url == ""
 
 
 def test_the_only_cost_settings_are_the_approved_ones() -> None:

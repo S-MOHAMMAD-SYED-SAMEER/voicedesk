@@ -181,6 +181,15 @@ class Settings(BaseSettings):
     # is how long a media stream was open; what a carrier bills is its own
     # record of the call, rounded up, which this process never sees.
 
+    # --- Evaluation ---
+    # Where `python -m app.evals` runs. Blank means "derive one from
+    # `database_url` by appending `_evals`", which is the safe default: the
+    # evaluation suite creates, migrates and truncates whatever it is pointed
+    # at, so it must never be pointed at the database anything else uses. The
+    # runner refuses outright to touch a database whose name does not end in
+    # `_evals`, whether that name was derived or configured here.
+    eval_database_url: str = ""
+
     @field_validator("stt_streaming_provider")
     @classmethod
     def _known_streaming_stt(cls, value: str) -> str:

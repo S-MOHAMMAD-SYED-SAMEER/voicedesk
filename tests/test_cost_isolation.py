@@ -13,6 +13,10 @@ import pathlib
 
 APP = pathlib.Path(__file__).resolve().parent.parent / "app"
 COST = APP / "cost"
+# The milestone-9 evaluator reads `calls.total_cost_usd` and keeps a field of
+# the same name on its own in-memory trace. It writes neither, so it is
+# excluded from the scans below, which are about who writes the column.
+EVALS = APP / "evals"
 AUDIO = APP / "audio"
 REALTIME = APP / "realtime"
 DIALOGUE = APP / "dialogue"
@@ -23,6 +27,13 @@ TRANSPORTS = ("app.audio", "app.realtime", "app.telephony", "app.api")
 
 def _modules(path: pathlib.Path) -> list[pathlib.Path]:
     return sorted(path.rglob("*.py"))
+
+
+def _production(path: pathlib.Path) -> list[pathlib.Path]:
+    """Every module except the evaluator, which measures rather than runs."""
+    return [
+        module for module in _modules(path) if not module.is_relative_to(EVALS)
+    ]
 
 
 def _imports(source: str) -> set[str]:
@@ -136,7 +147,7 @@ def test_only_the_recorder_writes_the_call_total() -> None:
     """Every other mention of the column in `app/` is prose explaining it."""
     writers = {
         module.relative_to(APP).as_posix()
-        for module in _modules(APP)
+        for module in _production(APP)
         if _assigns_to(module, "total_cost_usd")
     }
 
@@ -146,7 +157,7 @@ def test_only_the_recorder_writes_the_call_total() -> None:
 def test_the_model_declares_the_total_and_nothing_else_defines_it() -> None:
     declaring = {
         module.relative_to(APP).as_posix()
-        for module in _modules(APP)
+        for module in _production(APP)
         for node in ast.walk(ast.parse(module.read_text()))
         if isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
