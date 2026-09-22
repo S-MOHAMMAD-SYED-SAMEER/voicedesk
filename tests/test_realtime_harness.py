@@ -220,6 +220,36 @@ def test_latency_is_written_onto_the_turn_rows(
     assert turns[1].tts_latency_ms is not None
 
 
+def test_the_harness_turn_limit_applies_in_realtime_mode_too(
+    harness, open_weekdays, haircut
+) -> None:
+    """`on_turn` fires once per completed `RealtimeTurn` — counted there the
+    same way a press-to-talk turn is counted after `voice.speak` returns, and
+    bounded by the same `max_harness_turns` setting. A partial transcript or
+    a VAD frame is not a turn and must not count."""
+    client, model = harness(
+        say("Certainly."), realtime_enabled=True, max_harness_turns=1
+    )
+
+    with client.websocket_connect("/ws/harness") as socket:
+        _ready(socket)
+        _speak(socket)
+        _fall_silent(socket)
+        _drain(socket)
+
+        # The one allowed turn already completed; the server closes on its
+        # own rather than waiting for another utterance. Observed here as
+        # `websocket.close` (the server-initiated event) rather than
+        # `websocket.disconnect` (what a server's own `receive()` sees when
+        # the *client* goes away) — this is the test client's side of the
+        # same close `app/api/harness.py` initiates.
+        frame = socket.receive()
+
+    assert frame.get("type") == "websocket.close"
+    assert frame.get("code") == 1000
+    assert model.call_count == 1
+
+
 # --- switching modes ------------------------------------------------------
 
 

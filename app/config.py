@@ -204,6 +204,20 @@ class Settings(BaseSettings):
     # see `Settings.harness_available`. The switch exists so a shared staging
     # deployment can turn it off too.
     harness_enabled: bool = True
+    # Two harness-only bounds, read nowhere but `app/api/harness.py`. Not a
+    # substitute for `max_call_seconds` (telephony's own limit, enforced only
+    # in `app/telephony/stream.py` and left unchanged by these) and not a
+    # rate limit — there is none, see the README. They exist so the harness
+    # can be shown to a visitor without one open browser tab running an
+    # unbounded number of real Anthropic turns.
+    #
+    # Five minutes: long enough to try a booking and a reschedule with room
+    # to spare, short enough that a forgotten tab does not run indefinitely.
+    harness_max_session_seconds: int = Field(default=300, gt=0)
+    # Twenty caller turns: enough for a multi-step conversation — check
+    # availability, book, maybe reschedule — with headroom, not enough for an
+    # open-ended chat.
+    max_harness_turns: int = Field(default=20, gt=0)
     # How long a draining process waits for calls already in progress before
     # it stops. Long enough for a caller to finish a sentence and hear the
     # answer; short enough that a deployment is not held up by one open

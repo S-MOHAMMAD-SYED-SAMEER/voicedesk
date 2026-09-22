@@ -1667,6 +1667,15 @@ providers you use. Without it the harness still connects and plays its
 greeting, and each turn comes back as a `turn_failed` message rather than
 dropping the socket.
 
+**Harness-only bounds.** Two settings, read nowhere but `app/api/harness.py`:
+`VOICEDESK_HARNESS_MAX_SESSION_SECONDS` (default 300) closes a session that
+has been open longer than that, and `VOICEDESK_MAX_HARNESS_TURNS` (default
+20) closes it once that many caller turns have completed — both with close
+code 1000, checked the same way telephony's own `MAX_CALL_SECONDS` is
+checked, on the next frame after the bound is crossed. Neither applies to a
+Twilio call, and neither is authentication or a rate limit: the harness
+still has none of either, for the reasons given above.
+
 Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need

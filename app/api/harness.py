@@ -26,6 +26,8 @@ anything about dialogue, tools, the calendar, or a vendor's API.
 """
 
 import logging
+import time
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -79,6 +81,34 @@ TRY_AGAIN_LATER = 1013
 # 1008 is a policy violation: what a browser is told when the harness is not
 # being served at all.
 POLICY_VIOLATION = 1008
+# 1000 is a normal closure: what a browser is told when a demo bound —
+# session duration or turn count — ends the call deliberately, the same code
+# `app/telephony/stream.py` uses for the same reason.
+NORMAL_CLOSURE = 1000
+
+
+@dataclass
+class _HarnessBudget:
+    """How much of one harness call's demo bounds are left.
+
+    Harness-only, and read nowhere else: telephony has its own, separately
+    enforced `max_call_seconds` (`app/telephony/stream.py::StreamState`) and
+    no turn cap at all. Neither of those is touched by this.
+
+    `opened_at` follows the same `time.monotonic()` pattern
+    `StreamState.expired` already uses, for the same reason — wall-clock time
+    can jump with the system clock; a call's own duration must not.
+    """
+
+    opened_at: float = field(default_factory=time.monotonic)
+    turns: int = 0
+
+    def expired(self, settings: Settings) -> bool:
+        elapsed = time.monotonic() - self.opened_at
+        return elapsed > settings.harness_max_session_seconds
+
+    def turn_limit_reached(self, settings: Settings) -> bool:
+        return self.turns >= settings.max_harness_turns
 
 
 @router.get("/harness", response_class=HTMLResponse)
@@ -140,6 +170,7 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
 
     session = get_sessionmaker()()
     guard: ConversationGuard | None = None
+    budget = _HarnessBudget()
     try:
         call = _start_call(session)
         # Every turn reaches the database through this, one at a time. The
@@ -161,7 +192,9 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
 
         try:
             async with anyio.create_task_group() as turns:
-                realtime = _build_realtime(socket, session, conversation, settings)
+                realtime = _build_realtime(
+                    socket, session, conversation, settings, budget, str(call.id)
+                )
                 realtime.attach(turns)
 
                 greeting = voice.greeting(GREETING)
@@ -186,7 +219,14 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
                     await socket.send_bytes(greeting.audio)
 
                 await _converse(
-                    socket, session, voice, realtime, settings, str(call.id), call
+                    socket,
+                    session,
+                    voice,
+                    realtime,
+                    settings,
+                    str(call.id),
+                    call,
+                    budget,
                 )
                 turns.cancel_scope.cancel()
         except WebSocketDisconnect:
@@ -201,7 +241,12 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
 
 
 def _build_realtime(
-    socket: WebSocket, session, conversation: Conversation, settings: Settings
+    socket: WebSocket,
+    session,
+    conversation: Conversation,
+    settings: Settings,
+    budget: _HarnessBudget,
+    call_id: str,
 ) -> RealtimeSession:
     """The streaming session, built whether or not it ends up being used.
 
@@ -218,6 +263,18 @@ def _build_realtime(
             record_latency(session, turn.dialogue, turn.timing)
             _record_cost(session, turn, settings)
         await socket.send_json(_realtime_message(turn))
+
+        # One completed turn, win or lose — never a partial transcript and
+        # never a model/tool iteration inside it, both of which fire (or
+        # don't) before this callback ever runs.
+        budget.turns += 1
+        if budget.turn_limit_reached(settings):
+            logger.info(
+                "Ending harness call %s: it reached the %d-turn demo limit.",
+                call_id,
+                settings.max_harness_turns,
+            )
+            await socket.close(code=NORMAL_CLOSURE)
 
     return RealtimeSession(
         conversation=conversation,
@@ -239,14 +296,32 @@ async def _converse(
     settings: Settings,
     voice_call_id: str,
     call: Call,
+    budget: _HarnessBudget,
 ) -> None:
-    """Read frames until the caller hangs up or the socket closes."""
+    """Read frames until the caller hangs up, a demo bound is hit, or the
+    socket closes."""
     streaming = settings.realtime_enabled
 
     while True:
         frame = await socket.receive()
 
         if frame.get("type") == "websocket.disconnect":
+            return
+
+        # Checked here, the same way `StreamState.expired` is checked at the
+        # top of telephony's own frame loop: on the next frame after the
+        # bound is crossed, not by a background timer. A tab nobody closed
+        # sits open until it sends something, exactly as an unattended phone
+        # call already does.
+        if budget.expired(settings):
+            logger.info(
+                "Ending harness call %s: it has run for longer than %ds.",
+                voice_call_id,
+                settings.harness_max_session_seconds,
+            )
+            if streaming:
+                await realtime.finish()
+            await socket.close(code=NORMAL_CLOSURE)
             return
 
         text = frame.get("text")
@@ -296,6 +371,12 @@ async def _converse(
             await _error(socket, "turn_failed", f"{type(exc).__name__}: {exc}")
             continue
 
+        # One completed user turn — `voice.speak` returned, win or lose. Not
+        # counted: the frame that carried it, or any model/tool iteration
+        # inside `Conversation.send`, which `max_tool_iterations` already
+        # bounds on its own.
+        budget.turns += 1
+
         if turn.dialogue is not None:
             _record_cost(session, turn, settings)
 
@@ -304,6 +385,15 @@ async def _converse(
         await socket.send_json(_turn_message(turn))
         if turn.speech is not None:
             await socket.send_bytes(turn.speech.audio)
+
+        if budget.turn_limit_reached(settings):
+            logger.info(
+                "Ending harness call %s: it reached the %d-turn demo limit.",
+                voice_call_id,
+                settings.max_harness_turns,
+            )
+            await socket.close(code=NORMAL_CLOSURE)
+            return
 
 
 def _record_cost(session: Session, turn, settings: Settings) -> None:
