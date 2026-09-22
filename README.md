@@ -1364,7 +1364,7 @@ does not matter teaches operators to skim the list.
 Every problem is reported in one failure, by name, with no value quoted — one
 variable per restart is a bad way to fix a deployment.
 
-**Nothing is required anywhere else.** A fresh clone, the 1,653-test suite and
+**Nothing is required anywhere else.** A fresh clone, the 1,651-test suite and
 `python -m app.evals` all run offline with no credential, and
 `tests/test_production_config.py` asserts both halves of that: what production
 demands, and what nothing else may be made to demand.
@@ -1671,9 +1671,9 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (1,052 pass, 601 skip). With a database: **1,653 pass**, and no credential
+one (1,050 pass, 601 skip). With a database: **1,651 pass**, and no credential
 is needed for either.
 
-VoiceDesk is a separate application from DocIntel in this repository: its own
-package, dependencies, virtualenv, configuration prefix and database. Nothing
-is shared between them.
+VoiceDesk is maintained as its own standalone repository, separate from
+DocIntel: its own package, dependencies, virtualenv, configuration prefix and
+database. Nothing is shared between them.
