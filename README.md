@@ -1364,7 +1364,7 @@ does not matter teaches operators to skim the list.
 Every problem is reported in one failure, by name, with no value quoted — one
 variable per restart is a bad way to fix a deployment.
 
-**Nothing is required anywhere else.** A fresh clone, the 1,651-test suite and
+**Nothing is required anywhere else.** A fresh clone, the 1,661-test suite and
 `python -m app.evals` all run offline with no credential, and
 `tests/test_production_config.py` asserts both halves of that: what production
 demands, and what nothing else may be made to demand.
@@ -1646,15 +1646,36 @@ Or in containers, with PostgreSQL and the migration step included:
 docker compose up --build
 ```
 
-**The browser harness.** With the server running, open
-<http://localhost:8000/harness>, press Connect, then press and hold *Hold to
-talk* and release to send. You will need at least one active row in `services`
-and some `business_hours` for the calendar to have anything to offer.
+### Browser demo
 
-Out of the box the speech providers are offline, so you can do that with no
-credentials at all — but remember what you are hearing: whatever you say, the
-transcriber returns the same fixed sentence, and the reply is a tone rather
-than a voice. For real speech:
+Try the real dialogue, tool-calling and calendar pipeline from a browser tab
+— no phone number, no Twilio, no telephony credential of any kind. This is
+not a separate demo implementation: `/harness` and `/ws/harness` run the
+exact `Conversation` → tool layer → `CalendarService` → PostgreSQL pipeline
+a real call runs, with only the transport swapped for a microphone.
+
+**Prerequisites:** Docker (or a local PostgreSQL and Python 3.13, per
+"Running locally" above), and one Anthropic API key for real dialogue —
+telephony credentials are not needed and telephony stays off
+(`VOICEDESK_TELEPHONY_ENABLED` defaults to `false`).
+
+**1. Set the one credential that matters, then start the stack:**
+
+```bash
+export VOICEDESK_ANTHROPIC_API_KEY=sk-ant-...
+docker compose up --build
+```
+
+**2. Open the harness** at <http://localhost:8000/harness>, press *Connect*,
+then press and hold *Hold to talk* and release to send. You will need at
+least one active row in `services` and some `business_hours` for the
+calendar to have anything to offer.
+
+**Speech stays offline by default.** `VOICEDESK_STT_PROVIDER` and
+`VOICEDESK_TTS_PROVIDER` default to `offline` — a fixed transcript in, a
+tone out — which is what lets the demo run with no STT/TTS credential at
+all; it is a harness for the dialogue layer, not a claim about speech
+recognition or a voice. For real speech:
 
 ```bash
 export VOICEDESK_STT_PROVIDER=deepgram VOICEDESK_DEEPGRAM_API_KEY=...
@@ -1662,25 +1683,30 @@ export VOICEDESK_TTS_PROVIDER=elevenlabs VOICEDESK_ELEVENLABS_API_KEY=...
 export VOICEDESK_TTS_VOICE=...            # an ElevenLabs voice id
 ```
 
-The dialogue itself needs `VOICEDESK_ANTHROPIC_API_KEY` whichever speech
-providers you use. Without it the harness still connects and plays its
-greeting, and each turn comes back as a `turn_failed` message rather than
-dropping the socket.
+The dialogue itself always needs `VOICEDESK_ANTHROPIC_API_KEY`, whichever
+speech providers you use. Without it the harness still connects and plays
+its greeting, and each turn comes back as a `turn_failed` message rather
+than dropping the socket.
 
-**Harness-only bounds.** Two settings, read nowhere but `app/api/harness.py`:
-`VOICEDESK_HARNESS_MAX_SESSION_SECONDS` (default 300) closes a session that
-has been open longer than that, and `VOICEDESK_MAX_HARNESS_TURNS` (default
-20) closes it once that many caller turns have completed — both with close
-code 1000, checked the same way telephony's own `MAX_CALL_SECONDS` is
-checked, on the next frame after the bound is crossed. Neither applies to a
-Twilio call, and neither is authentication or a rate limit: the harness
-still has none of either, for the reasons given above.
+**Demo safety bounds, not authentication.** Two settings, read nowhere but
+`app/api/harness.py`: `VOICEDESK_HARNESS_MAX_SESSION_SECONDS` (default 300)
+closes a session that has been open longer than that, and
+`VOICEDESK_MAX_HARNESS_TURNS` (default 20) closes it once that many caller
+turns have completed — both with close code 1000, checked the same way
+telephony's own `MAX_CALL_SECONDS` is checked, on the next frame after the
+bound is crossed. Neither applies to a Twilio call, and neither is
+authentication or a rate limit: the harness remains otherwise
+unauthenticated, exactly as documented above.
+
+**Stopping.** Press *Hang up* in the page, or close the tab — either ends
+the call the same way a caller hanging up does. `docker compose down` stops
+the stack.
 
 Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (1,050 pass, 601 skip). With a database: **1,651 pass**, and no credential
+one (1,053 pass, 608 skip). With a database: **1,661 pass**, and no credential
 is needed for either.
 
 VoiceDesk is maintained as its own standalone repository, separate from
