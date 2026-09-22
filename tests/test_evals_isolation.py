@@ -19,12 +19,21 @@ import subprocess
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-REPO = ROOT.parent
+# This repository's own root. Before VoiceDesk was extracted from the Prjs
+# monorepo, ROOT was the voicedesk/ subdirectory and REPO was one level up,
+# at the monorepo root. Extraction promoted voicedesk/ to be the repository
+# root itself, so the git root and the package root now coincide.
+REPO = ROOT
 APP = ROOT / "app"
 EVALS = APP / "evals"
 
-# Where M9 began. Frozen files are diffed against it.
-M8_COMMIT = "f18bd15"
+# Where M9 began. Frozen files are diffed against it. This is the hash
+# git-filter-repo gave the milestone-8 "add cost tracking" commit when
+# VoiceDesk was extracted to its own repository — the commit's content,
+# author, date and message are unchanged; only its tree (now rooted here
+# instead of at voicedesk/ inside the monorepo) was rewritten. It was
+# f18bd15 in the Prjs monorepo.
+M8_COMMIT = "4031a26"
 
 VENDOR_SDKS = {"anthropic", "openai", "google", "cohere", "mistralai", "twilio"}
 NETWORK = {"httpx", "requests", "urllib", "socket", "websockets", "http"}
@@ -167,7 +176,7 @@ def test_the_evaluator_computes_no_availability_of_its_own() -> None:
 
 
 def test_the_cost_layer_is_unchanged() -> None:
-    assert _changed_since(M8_COMMIT, "voicedesk/app/cost") == []
+    assert _changed_since(M8_COMMIT, "app/cost") == []
 
 
 def test_the_evaluator_adds_no_pricing() -> None:
@@ -207,20 +216,23 @@ def test_the_evaluator_writes_no_cost_row_of_its_own() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "voicedesk/app/realtime",
-        "voicedesk/app/audio",
-        "voicedesk/app/tools",
-        "voicedesk/app/dialogue",
-        "voicedesk/app/models",
-        "voicedesk/alembic",
+        "app/realtime",
+        "app/audio",
+        "app/tools",
+        "app/dialogue",
+        "app/models",
+        "alembic",
     ],
 )
 def test_a_frozen_area_is_unchanged(path: str) -> None:
     assert _changed_since(M8_COMMIT, path) == []
 
 
-def test_docintel_is_untouched() -> None:
-    assert _changed_since(M8_COMMIT, "docintel") == []
+# There is no standalone equivalent of "docintel is untouched": docintel was
+# a sibling project in the Prjs monorepo, and this repository does not
+# contain it at all post-extraction. The invariant that boundary protected
+# no longer has anything to check, so the assertion was removed rather than
+# kept as a vacuous pass.
 
 
 def test_the_evaluator_still_touches_only_its_own_package() -> None:
@@ -231,10 +243,10 @@ def test_the_evaluator_still_touches_only_its_own_package() -> None:
     approved reasons; what this asserts is that none of the evaluator's
     modules moved out of `app/evals/`.
     """
-    changed = set(_changed_since(M8_COMMIT, "voicedesk/app/evals"))
+    changed = set(_changed_since(M8_COMMIT, "app/evals"))
 
     assert changed
-    assert all(name.startswith("voicedesk/app/evals/") for name in changed)
+    assert all(name.startswith("app/evals/") for name in changed)
 
 
 # --- no migration ----------------------------------------------------------
@@ -276,7 +288,7 @@ def test_the_evaluator_declares_no_model() -> None:
 
 
 def test_no_dependency_was_added() -> None:
-    assert _changed_since(M8_COMMIT, "voicedesk/pyproject.toml") == []
+    assert _changed_since(M8_COMMIT, "pyproject.toml") == []
 
 
 def test_the_evaluator_uses_only_what_is_already_installed() -> None:

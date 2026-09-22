@@ -14,47 +14,55 @@ import subprocess
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-REPO = ROOT.parent
+# This repository's own root. Before VoiceDesk was extracted from the Prjs
+# monorepo, ROOT was the voicedesk/ subdirectory and REPO was one level up,
+# at the monorepo root. Extraction promoted voicedesk/ to be the repository
+# root itself, so the git root and the package root now coincide.
+REPO = ROOT
 APP = ROOT / "app"
 
-# Where milestone 10 began.
-M9_COMMIT = "dd19e04"
+# Where milestone 10 began. This is the hash git-filter-repo gave the
+# milestone-9 "add evaluation system" commit when VoiceDesk was extracted to
+# its own repository — the commit's content, author, date and message are
+# unchanged; only its tree (now rooted here instead of at voicedesk/ inside
+# the monorepo) was rewritten. It was dd19e04 in the Prjs monorepo.
+M9_COMMIT = "5f0a330"
 
 # The production modules milestone 10 was approved to change, each for one
 # reason. Anything outside this set showing up in the diff is scope creep.
 APPROVED = {
     # The refused-reschedule rollback: the defect milestone 9 measured.
-    "voicedesk/app/calendar/service.py",
+    "app/calendar/service.py",
     # Production settings, timeouts, and the two properties the guards read.
-    "voicedesk/app/config.py",
+    "app/config.py",
     # Preflight, draining, the closed documentation surface, the error
     # boundary.
-    "voicedesk/app/main.py",
+    "app/main.py",
     # Refused in production, and admitted through the same counter as a call.
-    "voicedesk/app/api/harness.py",
+    "app/api/harness.py",
     # A connect timeout on the engine.
-    "voicedesk/app/db/session.py",
+    "app/db/session.py",
     # A request timeout on the model client.
-    "voicedesk/app/providers/anthropic_llm.py",
+    "app/providers/anthropic_llm.py",
     # Connect and idle timeouts on the two streaming sockets.
-    "voicedesk/app/providers/deepgram_stream_stt.py",
-    "voicedesk/app/providers/elevenlabs_stream_tts.py",
+    "app/providers/deepgram_stream_stt.py",
+    "app/providers/elevenlabs_stream_tts.py",
     # The stream token, admission, frame and duration limits.
-    "voicedesk/app/telephony/stream.py",
-    "voicedesk/app/telephony/twiml.py",
-    "voicedesk/app/telephony/webhook.py",
+    "app/telephony/stream.py",
+    "app/telephony/twiml.py",
+    "app/telephony/webhook.py",
 }
 
 # What milestone 10 added. New files, so nothing they do can regress
 # anything that was already working.
 ADDED = {
-    "voicedesk/app/api/ready.py",
-    "voicedesk/app/logging.py",
-    "voicedesk/app/preflight.py",
-    "voicedesk/app/providers/streaming.py",
-    "voicedesk/app/retention.py",
-    "voicedesk/app/runtime.py",
-    "voicedesk/app/telephony/stream_token.py",
+    "app/api/ready.py",
+    "app/logging.py",
+    "app/preflight.py",
+    "app/providers/streaming.py",
+    "app/retention.py",
+    "app/runtime.py",
+    "app/telephony/stream_token.py",
 }
 
 
@@ -87,7 +95,7 @@ def _imports(source: str) -> set[str]:
 
 
 def test_no_production_file_outside_the_approved_set_changed() -> None:
-    changed = set(_changed_since(M9_COMMIT, "voicedesk/app"))
+    changed = set(_changed_since(M9_COMMIT, "app"))
 
     assert changed <= APPROVED | ADDED, changed - (APPROVED | ADDED)
 
@@ -95,7 +103,7 @@ def test_no_production_file_outside_the_approved_set_changed() -> None:
 def test_every_approved_change_was_actually_made() -> None:
     """The other direction: a file listed as changed that is not would mean
     this list had drifted away from the milestone it describes."""
-    changed = set(_changed_since(M9_COMMIT, "voicedesk/app"))
+    changed = set(_changed_since(M9_COMMIT, "app"))
 
     assert APPROVED <= changed, APPROVED - changed
 
@@ -112,27 +120,29 @@ def test_each_new_module_is_there() -> None:
     "path",
     [
         # The tool semantics, the prompt and the tool loop.
-        "voicedesk/app/tools",
-        "voicedesk/app/dialogue",
+        "app/tools",
+        "app/dialogue",
         # The VAD algorithm and barge-in.
-        "voicedesk/app/realtime",
-        "voicedesk/app/audio",
+        "app/realtime",
+        "app/audio",
         # Pricing.
-        "voicedesk/app/cost",
+        "app/cost",
         # The evaluator's semantics.
-        "voicedesk/app/evals",
+        "app/evals",
         # The schema and its migrations.
-        "voicedesk/app/models",
-        "voicedesk/alembic",
+        "app/models",
+        "alembic",
     ],
 )
 def test_a_frozen_area_is_unchanged(path: str) -> None:
     assert _changed_since(M9_COMMIT, path) == []
 
 
-def test_docintel_is_untouched() -> None:
-    """A sibling project that finished before this one started."""
-    assert _changed_since(M9_COMMIT, "docintel") == []
+# There is no standalone equivalent of "docintel is untouched": docintel was
+# a sibling project in the Prjs monorepo, and this repository does not
+# contain it at all post-extraction. The invariant that boundary protected
+# no longer has anything to check, so the assertion was removed rather than
+# kept as a vacuous pass.
 
 
 # --- no schema change ------------------------------------------------------
@@ -175,7 +185,7 @@ def test_no_new_module_declares_a_model() -> None:
 def test_no_dependency_was_added_or_moved() -> None:
     """The pinned set in `requirements.txt` is a record of what was already
     installed, not a reason to install anything."""
-    assert _changed_since(M9_COMMIT, "voicedesk/pyproject.toml") == []
+    assert _changed_since(M9_COMMIT, "pyproject.toml") == []
 
 
 def test_the_new_modules_use_only_what_is_already_installed() -> None:
@@ -299,7 +309,7 @@ def test_no_configuration_variable_was_renamed() -> None:
     from app.config import Settings
 
     before = _subprocess.run(
-        ["git", "show", f"{M9_COMMIT}:voicedesk/app/config.py"],
+        ["git", "show", f"{M9_COMMIT}:app/config.py"],
         cwd=REPO,
         capture_output=True,
         text=True,
