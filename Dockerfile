@@ -19,7 +19,7 @@ WORKDIR /app
 # the application itself with --no-deps, so installing it cannot quietly
 # resolve something different.
 COPY requirements.txt ./
-RUN pip install --require-hashes=false -r requirements.txt
+RUN pip install -r requirements.txt
 
 # Every runtime dependency ships a manylinux wheel — psycopg[binary] included
 # — so no compiler and no system library is needed here.

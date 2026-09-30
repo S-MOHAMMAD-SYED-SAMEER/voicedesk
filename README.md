@@ -1567,12 +1567,24 @@ with them set it serves `/health` and `/ready` and answers `404` to `/harness`,
 Not proved: anything about a real deployment. No container has run under an
 orchestrator, no `SIGTERM` has arrived from Kubernetes, no real carrier has
 connected to a token-bearing stream URL, and no provider timeout has fired
-against a real provider. The Docker gate for this milestone was
-**environment-blocked**: the Docker client is installed where this was built
-but no daemon is reachable, so `docker build` and `docker compose up` were
-never executed. The image is asserted by reading the Dockerfile —
-`tests/test_packaging.py` checks the user, the command form, the health check
-and the absence of any credential — not by building it.
+against a real provider. The Docker gate for milestone 10 itself was
+**environment-blocked**: the Docker client was installed where that milestone
+was built but no daemon was reachable there, so `docker build` and
+`docker compose up` were never executed at the time. The image was asserted
+by reading the Dockerfile — `tests/test_packaging.py` checks the user, the
+command form, the health check and the absence of any credential — not by
+building it.
+
+**Since then**, on a machine with a reachable Docker daemon, the gate has
+been run for real: `docker compose build` succeeded, `docker compose up -d`
+brought PostgreSQL to healthy, ran the migration container to completion, and
+started the application; `/health` and `/ready` both answered `200`,
+`GET /harness` served the real page, and a `WS /ws/harness` session produced
+a genuine offline-TTS greeting before a clean `docker compose down -v`. This
+proves the Dockerized local/offline harness path specifically. It does not
+prove a real Anthropic dialogue turn, real Deepgram or ElevenLabs speech, a
+real Twilio call, or anything about a production deployment — those remain
+exactly as unproved as the rest of this section says.
 
 ### Decisions recorded in milestone 10
 
@@ -1592,7 +1604,7 @@ and the absence of any credential — not by building it.
 | D12 | No rate limiting | It belongs in front of this process, and a token bucket here would look like protection without being it |
 | D13 | Retention has no default age | How long a business may keep a recording of a customer is a legal question about that business |
 | D14 | `requirements.txt` from `pip freeze`, nothing upgraded | A hardening milestone that also moved twelve versions would be two milestones |
-| D15 | Docker gate marked environment-blocked | No daemon was available; claiming a build that never ran is the one thing worse than not running it |
+| D15 | Docker gate marked environment-blocked at milestone 10, then run for real once a daemon was reachable | No daemon was available then; claiming a build that never ran is the one thing worse than not running it — so the gate was verified for real as soon as it could be, rather than the claim being upgraded without evidence |
 
 ### Deliberately not built yet
 
