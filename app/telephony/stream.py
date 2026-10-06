@@ -70,6 +70,7 @@ from app.runtime import (
     ConversationGuard,
     close_when_idle,
     get_admission,
+    write_when_idle,
 )
 from app.telephony import stream_token
 from app.telephony.events import (
@@ -248,31 +249,42 @@ class StreamState:
         post-call reporting. `total_cost_usd` is left to the cost recorder,
         which will only fill it in if every component of the call was priced;
         the line never is, so on a telephone call it stays null by design.
+
+        Nothing here touches the session until no thread can still be inside a
+        turn. An abandoned model request keeps using it and cannot be cancelled
+        or killed, so committing it from here — before the guard has been
+        claimed — would be two threads in one `Session`. Waiting is the only
+        honest option, and when the wait runs out the session is left for the
+        collector, with the end of the call unrecorded, rather than used or
+        closed underneath a thread that is still in it.
         """
-        if self.session is not None:
+        session = self.session
+        if session is None:
+            return
+
+        def finalise() -> None:
             try:
                 if self.call is not None:
                     self.call.ended_at = datetime.now(UTC)
-                    self.session.commit()
+                    session.commit()
                     # Measured duration, recorded unpriced. What a carrier
                     # bills is its own record of the call, rounded up, which
                     # this process never sees.
-                    record_call_cost(
-                        self.session, self.call, CARRIER_NAME, self.settings
-                    )
+                    record_call_cost(session, self.call, CARRIER_NAME, self.settings)
             except Exception:  # pragma: no cover - cleanup must not mask errors
                 logger.exception("Could not record the end of call %s", self.call_sid)
-                self.session.rollback()
+                session.rollback()
             finally:
-                # Not closed while a thread could still be inside a turn: an
-                # abandoned model request keeps using this session, and
-                # cannot be cancelled or killed. Waiting is the only honest
-                # option, and when the wait runs out the session is left for
-                # the collector rather than closed underneath it.
-                close_when_idle(
-                    self.guard, self.session, self.settings.shutdown_grace_seconds
-                )
+                # Still under the claim, so a latency write queued behind it
+                # finds no session rather than a closed one.
                 self.session = None
+
+        try:
+            close_when_idle(
+                self.guard, session, self.settings.shutdown_grace_seconds, finalise
+            )
+        finally:
+            self.session = None
 
 
 @router.websocket("/telephony/stream")
@@ -523,8 +535,19 @@ async def _record_latency(state: StreamState, turn: RealtimeTurn) -> None:
         return
     from app.realtime.latency import record
 
-    record(state.session, result, turn.timing)
-    _record_cost(state, turn)
+    def write() -> None:
+        # Checked again under the guard: the call may have ended while this
+        # waited for a turn to finish with the session.
+        if state.session is None:
+            return
+        record(state.session, result, turn.timing)
+        _record_cost(state, turn)
+
+    # On a worker thread, under the guard. This runs from `RealtimeSession`'s
+    # turn task on the event loop while another turn may be inside
+    # `Conversation.send` on the same `Session`, and a `Session` is not
+    # thread-safe.
+    await write_when_idle(state.guard, write)
 
 
 def _record_cost(state: StreamState, turn) -> None:
