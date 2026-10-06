@@ -33,9 +33,14 @@ FRAME_MS = 20
 SPEECH_AMPLITUDE = 9000
 TONE_HZ = 220.0
 
-# How long to let a held reply sit before interrupting it. Long enough for the
-# turn task to have started speaking, short enough that 18 scenarios stay fast.
-SETTLE_SECONDS = 0.05
+# How long to wait for a reply to start playing before giving up on the
+# scenario. Not a pause: the wait ends the moment the reply is playing, so this
+# is only the point at which a reply that never starts fails the scenario
+# loudly instead of hanging the run.
+REPLY_START_TIMEOUT_SECONDS = 30.0
+
+# How often the session is asked whether it is playing yet.
+POLL_SECONDS = 0.005
 
 
 def speech_frame(ms: int = FRAME_MS) -> bytes:
@@ -111,6 +116,21 @@ class PacedTextToSpeech:
         return opened
 
 
+async def until_playing(session) -> None:
+    """Wait until the session is actually playing a reply.
+
+    Talking over a reply is only an interruption once there is a reply to talk
+    over, and when that is depends on the dialogue turn — a model request, tool
+    calls and the database, on a worker thread — which takes as long as the
+    machine takes. So this asks the session, rather than guessing how long it
+    will be. A reply that never starts raises `TimeoutError`, which the runner
+    records against the scenario.
+    """
+    with anyio.fail_after(REPLY_START_TIMEOUT_SECONDS):
+        while not session.playing:
+            await anyio.sleep(POLL_SECONDS)
+
+
 async def feed(session, frames: int, frame: bytes) -> None:
     """Hand the session `frames` copies of one frame."""
     for _ in range(frames):
@@ -120,10 +140,12 @@ async def feed(session, frames: int, frame: bytes) -> None:
 __all__ = [
     "FRAME_MS",
     "SAMPLE_RATE",
-    "SETTLE_SECONDS",
+    "POLL_SECONDS",
+    "REPLY_START_TIMEOUT_SECONDS",
     "PacedTextToSpeech",
     "PacedVoiceStream",
     "feed",
     "silent_frame",
     "speech_frame",
+    "until_playing",
 ]

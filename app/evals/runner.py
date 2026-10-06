@@ -193,7 +193,8 @@ class EvalRunner:
             if scenario.interrupt:
                 # The reply is held at its first chunk; talking over it now is
                 # an interruption rather than a comment on a finished sentence.
-                await anyio.sleep(rt.SETTLE_SECONDS)
+                # Wait until it is actually playing, however long the turn takes.
+                await rt.until_playing(voice)
                 await rt.feed(voice, scenario.speech_frames, speech)
             else:
                 await voice.finish()

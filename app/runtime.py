@@ -29,18 +29,34 @@ The guard solves both by letting one thread at a time into the conversation,
 and by giving teardown a way to wait until nobody is inside it. Where waiting
 is not enough it says so and declines to close, because a leaked session that
 is collected later is a smaller problem than a closed one still in use.
+
+**Everything that touches the session goes through it — not only the dialogue.**
+A turn's thread is not the only code that uses the call's `Session`. When a
+turn ends, the transport writes its measured latency and what it cost; when
+the call ends, it records the end of the call. Those used to run directly on
+the event-loop thread, so while one turn's thread was inside `Conversation.send`
+the loop thread could commit the same `Session` — and SQLAlchemy refuses a
+second operation on a session that is mid-operation with
+`IllegalStateChangeError`, or, worse, interleaves with it. `write_when_idle`
+runs such a write under the guard, on a worker thread, and `close_when_idle`
+runs the end-of-call write under the same claim that lets it close the session.
 """
 
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import TypeVar
+
+import anyio
 
 from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class CallRefused(RuntimeError):
@@ -141,6 +157,23 @@ class ConversationGuard:
         finally:
             self._lock.release()
 
+    def run(self, work: Callable[[], T]) -> T:
+        """Any other use of the call's session, once nobody else is inside it.
+
+        The same rule as `send`, for the code that is not a dialogue turn: the
+        latency and cost written after a turn, the end of the call. Blocks, so
+        it belongs on a worker thread — see `write_when_idle`.
+        """
+        if not self._lock.acquire(timeout=self.timeout):
+            raise TurnRejected(
+                f"A database write waited {self.timeout:g}s for a turn to "
+                "finish with the session and gave up."
+            )
+        try:
+            return work()
+        finally:
+            self._lock.release()
+
     @property
     def busy(self) -> bool:
         """Is a thread inside the conversation right now?"""
@@ -158,9 +191,51 @@ class ConversationGuard:
         """
         return self._lock.acquire(timeout=timeout)
 
+    def release(self) -> None:
+        """Give back a claim, so writers queued behind it can run and see that
+        the call is over."""
+        self._lock.release()
 
-def close_when_idle(guard: ConversationGuard | None, session, grace: float) -> bool:
+
+async def write_when_idle(guard: ConversationGuard | None, work: Callable[[], object]) -> bool:
+    """Do a write to the call's session from the event loop, without racing a turn.
+
+    Returns whether it ran. It declines, with a warning, if a turn is still
+    holding the session after the guard's timeout: these writes are best effort
+    (a call is not worth failing over a metric), and a write that cannot be
+    made safely is better skipped than made unsafely.
+
+    The wait happens on a worker thread, so the loop keeps reading audio while
+    a turn finishes. It is shielded from cancellation, because it is
+    bookkeeping for a turn that has already happened: an interrupted turn is
+    cancelled, and its latency and cost are still owed to the database.
+    """
+    if guard is None:
+        work()
+        return True
+
+    with anyio.CancelScope(shield=True):
+        try:
+            await anyio.to_thread.run_sync(guard.run, work)
+        except TurnRejected as exc:
+            logger.warning("Skipping a database write: %s", exc)
+            return False
+    return True
+
+
+def close_when_idle(
+    guard: ConversationGuard | None,
+    session,
+    grace: float,
+    finalise: Callable[[], None] | None = None,
+) -> bool:
     """Close a call's session once no thread can still be using it.
+
+    `finalise`, when given, is the call's last write to the session — recording
+    that it ended. It runs under the same claim that makes closing safe, because
+    committing a session another thread is inside is the same mistake as closing
+    it. If the claim cannot be had it is skipped, for the same reason the close
+    is.
 
     Returns whether it was closed. When a turn is still running — an
     abandoned model request, most likely, which cannot be cancelled and
@@ -172,7 +247,13 @@ def close_when_idle(guard: ConversationGuard | None, session, grace: float) -> b
     if session is None:
         return False
     if guard is None or guard.claim(grace):
-        session.close()
+        try:
+            if finalise is not None:
+                finalise()
+        finally:
+            session.close()
+            if guard is not None:
+                guard.release()
         return True
 
     logger.error(

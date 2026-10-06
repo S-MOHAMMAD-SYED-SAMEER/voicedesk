@@ -51,6 +51,13 @@ APPROVED = {
     "app/telephony/stream.py",
     "app/telephony/twiml.py",
     "app/telephony/webhook.py",
+    # The evaluator's barge-in scenario waited a fixed 50 ms for the reply to
+    # start, and failed whenever the dialogue turn took longer than that. It now
+    # waits until the session reports it is playing. Exactly these two files
+    # changed — the wait itself, and the constant it replaced — and every other
+    # file in `app/evals` is still pinned below.
+    "app/evals/realtime.py",
+    "app/evals/runner.py",
 }
 
 # What milestone 10 added. New files, so nothing they do can regress
@@ -127,8 +134,6 @@ def test_each_new_module_is_there() -> None:
         "app/audio",
         # Pricing.
         "app/cost",
-        # The evaluator's semantics.
-        "app/evals",
         # The schema and its migrations.
         "app/models",
         "alembic",
@@ -136,6 +141,21 @@ def test_each_new_module_is_there() -> None:
 )
 def test_a_frozen_area_is_unchanged(path: str) -> None:
     assert _changed_since(M9_COMMIT, path) == []
+
+
+def test_the_rest_of_the_evaluator_is_unchanged() -> None:
+    """The evaluator's semantics stay frozen, apart from the two approved files.
+
+    This used to be the whole directory in the list above. Exactly two of its
+    files were approved to change (see `APPROVED`), so it is everything else in
+    `app/evals` that is pinned here — a change to any other evaluator file, or
+    to a third file beside those two, fails.
+    """
+    unapproved = [
+        name for name in _changed_since(M9_COMMIT, "app/evals") if name not in APPROVED
+    ]
+
+    assert unapproved == []
 
 
 # There is no standalone equivalent of "docintel is untouched": docintel was

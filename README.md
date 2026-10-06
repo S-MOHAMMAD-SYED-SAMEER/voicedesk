@@ -332,7 +332,7 @@ caller text → Conversation → LanguageModel → tool_use
 **One module imports the SDK.** `app/providers/llm.py` defines a vendor-neutral
 `LanguageModel` protocol and its dataclasses; `app/providers/anthropic_llm.py`
 is the only file in the project that says `import anthropic`, and it takes an
-injectable client. So the dialogue layer, the tool layer and all 352 tests run
+injectable client. So the dialogue layer, the tool layer and the whole test suite run
 with no API key and no network — verified by running the suite with the key
 unset and the SDK's base URL pointed at a dead port. A source-parsing test
 enforces the boundary.
@@ -1718,7 +1718,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (1,053 pass, 608 skip). With a database: **1,661 pass**, and no credential
+one (1,053 pass, 613 skip). With a database: **1,666 pass**, and no credential
 is needed for either.
 
 VoiceDesk is maintained as its own standalone repository, separate from

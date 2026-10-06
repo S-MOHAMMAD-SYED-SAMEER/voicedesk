@@ -58,6 +58,7 @@ from app.runtime import (
     ConversationGuard,
     close_when_idle,
     get_admission,
+    write_when_idle,
 )
 from app.static import harness_page
 
@@ -170,6 +171,7 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
 
     session = get_sessionmaker()()
     guard: ConversationGuard | None = None
+    call: Call | None = None
     budget = _HarnessBudget()
     try:
         call = _start_call(session)
@@ -193,7 +195,7 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
         try:
             async with anyio.create_task_group() as turns:
                 realtime = _build_realtime(
-                    socket, session, conversation, settings, budget, str(call.id)
+                    socket, session, guard, settings, budget, str(call.id)
                 )
                 realtime.attach(turns)
 
@@ -221,6 +223,7 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
                 await _converse(
                     socket,
                     session,
+                    guard,
                     voice,
                     realtime,
                     settings,
@@ -231,19 +234,24 @@ async def _call(socket: WebSocket, settings: Settings) -> None:
                 turns.cancel_scope.cancel()
         except WebSocketDisconnect:
             pass
-        finally:
-            _end_call(session, call)
     finally:
-        # Not closed while a thread could still be inside a turn. An
-        # abandoned model request cannot be cancelled, so the choice is
-        # between waiting for it and closing the session underneath it.
-        close_when_idle(guard, session, settings.shutdown_grace_seconds)
+        # Neither written to nor closed while a thread could still be inside a
+        # turn. An abandoned model request cannot be cancelled, so the choice is
+        # between waiting for it and using or closing the session underneath it.
+        # The end of the call is recorded under the same claim as the close.
+        ended = call
+        close_when_idle(
+            guard,
+            session,
+            settings.shutdown_grace_seconds,
+            (lambda: _end_call(session, ended)) if ended is not None else None,
+        )
 
 
 def _build_realtime(
     socket: WebSocket,
     session,
-    conversation: Conversation,
+    guard: ConversationGuard,
     settings: Settings,
     budget: _HarnessBudget,
     call_id: str,
@@ -260,8 +268,15 @@ def _build_realtime(
 
     async def on_turn(turn: RealtimeTurn) -> None:
         if turn.dialogue is not None:
-            record_latency(session, turn.dialogue, turn.timing)
-            _record_cost(session, turn, settings)
+            # Under the guard, off the loop: another turn may be inside
+            # `Conversation.send` on this same `Session` right now.
+            await write_when_idle(
+                guard,
+                lambda: (
+                    record_latency(session, turn.dialogue, turn.timing),
+                    _record_cost(session, turn, settings),
+                ),
+            )
         await socket.send_json(_realtime_message(turn))
 
         # One completed turn, win or lose — never a partial transcript and
@@ -277,7 +292,7 @@ def _build_realtime(
             await socket.close(code=NORMAL_CLOSURE)
 
     return RealtimeSession(
-        conversation=conversation,
+        conversation=guard,
         stt=build_streaming_stt(settings),
         tts=build_streaming_tts(settings),
         sink=BrowserSink(socket),
@@ -291,6 +306,7 @@ def _build_realtime(
 async def _converse(
     socket: WebSocket,
     session: Session,
+    guard: ConversationGuard,
     voice: VoiceSession,
     realtime: RealtimeSession,
     settings: Settings,
@@ -378,7 +394,9 @@ async def _converse(
         budget.turns += 1
 
         if turn.dialogue is not None:
-            _record_cost(session, turn, settings)
+            # A realtime turn abandoned before a mode switch may still be
+            # inside the conversation, so this write takes the guard too.
+            await write_when_idle(guard, lambda: _record_cost(session, turn, settings))
 
         # JSON first, then the audio it describes, always in that order, so
         # the browser never has to guess what a binary frame belongs to.

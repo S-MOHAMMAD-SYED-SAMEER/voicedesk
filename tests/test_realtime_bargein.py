@@ -47,10 +47,17 @@ class SlowVoiceStream:
     Lets a test stand exactly in the middle of a reply and interrupt it.
     """
 
-    def __init__(self, text: str, audio_format: AudioFormat, gate: anyio.Event) -> None:
+    def __init__(
+        self,
+        text: str,
+        audio_format: AudioFormat,
+        gate: anyio.Event,
+        held: anyio.Event,
+    ) -> None:
         self._text = text
         self._format = audio_format
         self._gate = gate
+        self._held = held
         self.closed = False
         self.produced = 0
 
@@ -65,7 +72,10 @@ class SlowVoiceStream:
                 is_final=index == 4,
             )
             if index == 0:
-                # Hold here until the test says otherwise.
+                # The consumer has handled the first chunk and asked for the
+                # next: the reply is now mid-flight. Say so, then hold here until
+                # the test says otherwise.
+                self._held.set()
                 await self._gate.wait()
 
     async def aclose(self) -> None:
@@ -79,6 +89,8 @@ class SlowTTS:
     def __init__(self, sample_rate: int = 8000) -> None:
         self._format = AudioFormat(PCM_S16LE, sample_rate, 1, "raw")
         self.gate = anyio.Event()
+        # Set once a reply has played its first chunk and is held there.
+        self.held = anyio.Event()
         self.streams: list[SlowVoiceStream] = []
 
     @property
@@ -86,9 +98,22 @@ class SlowTTS:
         return self._format
 
     def stream(self, text: str, voice: str | None = None) -> SlowVoiceStream:
-        opened = SlowVoiceStream(text, self._format, self.gate)
+        opened = SlowVoiceStream(text, self._format, self.gate, self.held)
         self.streams.append(opened)
         return opened
+
+
+async def _until_mid_reply(tts: SlowTTS) -> None:
+    """Wait until the reply is playing and held at its first chunk.
+
+    Not a delay: the dialogue runs on a worker thread, with a model request, tool
+    calls and the database behind it, and how long that takes is not something a
+    test can know. This returns the moment the reply is actually mid-flight. The
+    ceiling is only so a reply that never starts fails the test instead of
+    hanging the suite.
+    """
+    with anyio.fail_after(30):
+        await tts.held.wait()
 
 
 async def _say_something(session, speech: int = 10, silence: int = 40) -> None:
@@ -130,7 +155,7 @@ async def test_speech_during_a_reply_interrupts_it(
         session.attach(group)
         await _say_something(session)
         # The reply is mid-flight, held at its first chunk.
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         assert session.playing
 
         for _ in range(10):
@@ -151,7 +176,7 @@ async def test_interrupting_bumps_the_generation(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         before = session.generation
 
         for _ in range(10):
@@ -171,7 +196,7 @@ async def test_the_interrupted_turn_is_marked_as_such(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         for _ in range(10):
             await session.feed(LOUD)
 
@@ -190,7 +215,7 @@ async def test_queued_audio_is_discarded_not_merely_stopped(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         assert sink.chunks
 
         for _ in range(10):
@@ -212,7 +237,7 @@ async def test_no_further_audio_is_sent_after_the_interruption(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         for _ in range(10):
             await session.feed(LOUD)
         after_clear = len(sink.order)
@@ -254,7 +279,7 @@ async def test_barge_in_can_be_switched_off(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         for _ in range(10):
             await session.feed(LOUD)
 
@@ -303,7 +328,7 @@ async def test_a_booking_that_already_happened_is_not_undone(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         for _ in range(10):
             await session.feed(LOUD)
         tts.gate.set()
@@ -325,7 +350,7 @@ async def test_the_dialogue_is_never_run_twice(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         for _ in range(10):
             await session.feed(LOUD)
         tts.gate.set()
@@ -348,7 +373,7 @@ async def test_the_transcript_of_an_interrupted_turn_still_stands(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         for _ in range(10):
             await session.feed(LOUD)
         group.cancel_scope.cancel()
@@ -367,7 +392,7 @@ async def test_a_new_turn_follows_the_interruption(
     async with anyio.create_task_group() as group:
         session.attach(group)
         await _say_something(session)
-        await anyio.sleep(0.05)
+        await _until_mid_reply(tts)
         await _say_something(session)  # interrupt, then finish speaking
         await anyio.sleep(0.05)
 
