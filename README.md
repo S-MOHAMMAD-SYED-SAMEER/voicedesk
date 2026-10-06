@@ -1718,12 +1718,8 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (1,053 pass, 608 skip). With a database all 1,661 run: **1,659 pass** in a
-full run, while two timing-sensitive realtime tests
-(`test_realtime_bargein.py::test_a_booking_that_already_happened_is_not_undone`
-and `test_realtime_telephony.py::test_the_reader_keeps_reading_while_a_turn_runs`)
-failed intermittently in full-suite runs and passed when run on their own. No
-credential is needed for either.
+one (1,053 pass, 613 skip). With a database: **1,666 pass**, and no credential
+is needed for either.
 
 VoiceDesk is maintained as its own standalone repository, separate from
 DocIntel: its own package, dependencies, virtualenv, configuration prefix and
