@@ -199,6 +199,10 @@ class Expectation:
     # finding: a system that silently tolerates broken tools is the thing the
     # specification is most afraid of.
     allow_tool_failures: frozenset[str] = frozenset()
+    # Read-only tools a *real* model may call any number of times, with any arguments, and succeed or fail,
+    # without it being a finding: asking the calendar again is not a mistake. Empty for the scripted suite, where
+    # every call is written down in advance.
+    tolerated_tools: frozenset[str] = frozenset()
     # Model calls expected across the whole call. `None` means "not asserted".
     # An interrupted turn that ran the model twice would show up here.
     expected_model_calls: int | None = None
