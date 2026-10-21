@@ -14,13 +14,12 @@ from sqlalchemy.orm import Session
 from app.models import Appointment, Service, Turn
 from app.providers.offline_streaming import (
     OfflineStreamingSpeechToText,
-    OfflineStreamingTextToSpeech,
 )
 from app.providers.speech import PCM_S16LE, AudioFormat
 from app.providers.streaming_tts import SpeechChunk
 from app.realtime.generation import Generations
 
-from .conftest import FakeModel, RecordingSink, pcm_silence, pcm_tone, say, use_tools
+from .conftest import FakeModel, pcm_silence, pcm_tone, say, use_tools
 
 LOUD = pcm_tone(9000)
 QUIET = pcm_silence()
@@ -314,8 +313,6 @@ async def test_a_booking_that_already_happened_is_not_undone(
     committed. Undoing a real booking because the caller started talking
     would be worse than letting it stand; what is discarded is the reply.
     """
-    from app.dialogue import Conversation
-    from app.realtime import RealtimeSession
 
     model = FakeModel(
         use_tools(("check_availability", {"service_name": "Haircut", "day": MONDAY})),

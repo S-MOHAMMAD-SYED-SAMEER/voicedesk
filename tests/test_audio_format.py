@@ -13,7 +13,6 @@ from app.providers.speech import (
 
 from .conftest import wav_bytes
 
-
 # --- the codec ------------------------------------------------------------
 
 

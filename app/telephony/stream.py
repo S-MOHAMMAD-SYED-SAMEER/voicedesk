@@ -39,7 +39,6 @@ from sqlalchemy.orm import Session
 from app.audio import VoiceSession, VoiceTurn
 from app.audio.telephony import (
     FRAME_BYTES,
-    FRAME_MS,
     TELEPHONY_SAMPLE_RATE,
     TelephonyAudioError,
     downsample_16k_to_8k,
@@ -54,7 +53,7 @@ from app.config import Settings, get_settings
 from app.cost import record_call_cost, record_turn_cost
 from app.db.session import get_sessionmaker
 from app.dialogue import Conversation
-from app.models import Call, CallDirection
+from app.models import Call
 from app.providers.factory import (
     build_model,
     build_streaming_stt,
@@ -83,8 +82,8 @@ from app.telephony.events import (
     UnknownEvent,
     UnsupportedMediaFormat,
     clear_frame,
-    media_frame,
     mark_frame,
+    media_frame,
     parse_event,
     require_supported_format,
 )

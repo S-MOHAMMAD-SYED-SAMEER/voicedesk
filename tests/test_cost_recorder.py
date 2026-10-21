@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from app.config import Settings
-from app.cost.recorder import record_call_cost, record_turn_cost, recompute_total
+from app.cost.recorder import recompute_total, record_call_cost, record_turn_cost
 from app.models import Call, CallCost, CostComponent, Turn, TurnRole
 from tests.conftest import cost_rows
 

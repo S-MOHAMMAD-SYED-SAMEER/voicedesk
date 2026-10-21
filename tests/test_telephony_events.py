@@ -13,8 +13,8 @@ from app.telephony.events import (
     StopEvent,
     UnknownEvent,
     UnsupportedMediaFormat,
-    media_frame,
     mark_frame,
+    media_frame,
     parse_event,
     require_supported_format,
 )

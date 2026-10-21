@@ -1,6 +1,5 @@
 """The transcript: what a call leaves behind in `turns` and `tool_calls`."""
 
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session

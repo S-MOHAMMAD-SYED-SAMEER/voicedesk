@@ -25,7 +25,6 @@ from app.cost.usage import (
 )
 from app.models import CostComponent
 
-
 # --- the record itself ----------------------------------------------------
 
 

@@ -14,8 +14,8 @@ from app.evals.dataset.common import CAI, haircut_only
 from app.evals.model import say, use_tools
 from app.evals.scenario import (
     Beat,
-    ExpectedTool,
     Expectation,
+    ExpectedTool,
     Scenario,
 )
 

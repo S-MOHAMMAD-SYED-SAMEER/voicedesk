@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.audio.endpoint import Endpointer, SpeechEnded, SpeechStarted
+from app.audio.endpoint import Endpointer, SpeechEnded
 from app.audio.vad import VoiceActivityDetector
 
 from .conftest import pcm_silence, pcm_tone

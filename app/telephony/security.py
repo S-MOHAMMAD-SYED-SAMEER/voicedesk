@@ -12,8 +12,8 @@ as a right one.
 
 import base64
 import hmac
-from hashlib import sha1
 from collections.abc import Mapping
+from hashlib import sha1
 
 SIGNATURE_HEADER = "X-Twilio-Signature"
 

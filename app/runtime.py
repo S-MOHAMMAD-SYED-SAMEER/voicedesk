@@ -52,7 +52,7 @@ from typing import TypeVar
 
 import anyio
 
-from app.config import Settings, get_settings
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 

@@ -18,8 +18,8 @@ from app.evals.model import say, use_tools
 from app.evals.scenario import (
     AppointmentSpec,
     Beat,
-    ExpectedTool,
     Expectation,
+    ExpectedTool,
     Scenario,
     SeedAppointment,
     ServiceSpec,

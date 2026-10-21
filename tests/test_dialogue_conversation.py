@@ -1,12 +1,10 @@
 """The turn manager: the loop, its limits, and what it says when it fails."""
 
 import json
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import Settings
 from app.dialogue import (
     LOOP_EXHAUSTED_REPLY,
     MODEL_FAILURE_REPLY,
