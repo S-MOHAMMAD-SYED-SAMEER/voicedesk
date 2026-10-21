@@ -33,6 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
+    "ruff>=0.6",
 ]
 
 [build-system]
@@ -49,3 +50,16 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+# Migrations are frozen: tests/test_db.py pins them against an early commit.
+extend-exclude = ["alembic"]
+
+[tool.ruff.lint]
+# Syntax errors and the pyflakes family (unused imports and variables, undefined names), basic style errors (E4, E7, E9)
+# and import order. Not enforced: line length and formatting, which would rewrite most of the codebase for no behavioural gain.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]

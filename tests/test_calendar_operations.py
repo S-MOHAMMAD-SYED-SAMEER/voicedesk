@@ -1,7 +1,7 @@
 """Booking, rescheduling and cancelling — against real PostgreSQL."""
 
 import uuid
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import Engine, select
@@ -19,7 +19,7 @@ from app.calendar import (
     SlotUnavailable,
 )
 from app.config import Settings
-from app.models import Appointment, AppointmentStatus, BusinessHours, Call, Service
+from app.models import Appointment, AppointmentStatus, Call, Service
 
 MONDAY = datetime(2026, 3, 2, tzinfo=UTC).date()
 

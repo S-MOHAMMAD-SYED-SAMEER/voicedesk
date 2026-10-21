@@ -14,7 +14,6 @@ from app.config import Settings
 from app.providers.speech import PCM_S16LE, AudioFormat
 from app.providers.streaming_stt import (
     FinalTranscript,
-    PartialTranscript,
     SpeechError,
     SpeechUnavailable,
     StreamingSpeechToText,

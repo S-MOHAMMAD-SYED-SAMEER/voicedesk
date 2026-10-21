@@ -113,8 +113,9 @@ def test_the_new_migration_is_safe_against_a_populated_table(
     """It adds a table and alters nothing, so existing rows cannot be hurt."""
     import uuid
 
-    from alembic import command
     from sqlalchemy import create_engine
+
+    from alembic import command
 
     monkeypatch.setenv("VOICEDESK_DATABASE_URL", database_url)
     get_settings.cache_clear()
@@ -162,8 +163,9 @@ def test_the_new_migration_can_be_undone_and_redone(
     database_url: str, alembic_config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A dropped enum type left behind would break the next upgrade."""
-    from alembic import command
     from sqlalchemy import create_engine
+
+    from alembic import command
 
     monkeypatch.setenv("VOICEDESK_DATABASE_URL", database_url)
     get_settings.cache_clear()

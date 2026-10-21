@@ -1,0 +1,134 @@
+# Four jobs.
+#   test          Linux: lint (ruff), then the whole suite against a real PostgreSQL.
+#   windows       The development machine's OS: the pinned requirements must install, and everything that needs no
+#                 database runs (the database tests skip).
+#   docker-build  Builds the image and runs the documented stack (`docker compose up --build`), then checks
+#                 /health, /ready and the browser harness page.
+#   audit         pip-audit over the installed dependencies.
+#
+# No credential of any kind is set anywhere in this file: the whole suite passes, and does, without one. The
+# model and both speech providers are injected in every test.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: voicedesk
+          POSTGRES_PASSWORD: voicedesk
+          POSTGRES_DB: voicedesk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U voicedesk"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      VOICEDESK_DATABASE_URL: postgresql+psycopg://voicedesk:voicedesk@localhost:5432/voicedesk
+      VOICEDESK_TEST_DATABASE_URL: postgresql+psycopg://voicedesk:voicedesk@localhost:5432/voicedesk_test
+
+    steps:
+      # Full history: the isolation tests diff frozen areas against a baseline commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Run the test suite
+        run: pytest -q
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: The pinned requirements install on Windows
+        run: pip install -r requirements.txt
+
+      - name: Install the project
+        run: pip install -e ".[dev]"
+
+      - name: Run the tests that need no database
+        run: pytest -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The compose file is valid
+        run: docker compose config -q
+
+      - name: Build and start the stack (db, migrate, app)
+        run: docker compose up --build -d
+
+      - name: Wait until the app is ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/ready > ready.json 2>/dev/null; then
+              cat ready.json; echo; exit 0
+            fi
+            sleep 5
+          done
+          echo "the app did not become ready in 5 minutes"
+          docker compose logs
+          exit 1
+
+      - name: The probes and the browser harness page answer
+        run: |
+          curl -fsS http://localhost:8000/health
+          echo
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/harness)" = "200"
+
+      - name: The container runs as a non-root user
+        run: test "$(docker compose exec -T app id -u)" = "10001"
+
+      - name: Logs, if anything failed
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install the project and pip-audit
+        run: |
+          pip install -e .
+          pip install pip-audit
+
+      - name: Audit the installed dependencies
+        run: pip-audit --skip-editable

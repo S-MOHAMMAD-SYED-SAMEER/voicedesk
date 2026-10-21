@@ -48,7 +48,6 @@ from app.providers.streaming_stt import (
     StreamingSpeechToText,
 )
 from app.providers.streaming_tts import (
-    SpeechChunk,
     StreamingTextToSpeech,
     VoiceError,
 )

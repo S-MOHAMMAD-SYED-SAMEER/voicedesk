@@ -24,8 +24,8 @@ from app.evals.scenario import (
     AppointmentSpec,
     Beat,
     Claim,
-    ExpectedTool,
     Expectation,
+    ExpectedTool,
     RealtimeExpectation,
     Scenario,
 )

@@ -27,7 +27,7 @@ from app.calendar import CalendarService, SlotUnavailable
 from app.config import Settings
 from app.dialogue import Conversation
 from app.models import Appointment, BusinessHours, Call, Service, Turn
-from app.tools import ToolContext, book_appointment, cancel, reschedule
+from app.tools import book_appointment, cancel, reschedule
 
 from .conftest import FakeModel, say, use_tools
 

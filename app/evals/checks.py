@@ -27,8 +27,8 @@ from typing import Any
 
 from app.dialogue import ToolCallRecord
 from app.evals.scenario import (
-    ExpectedTool,
     Expectation,
+    ExpectedTool,
     Scenario,
     arguments_match,
     normalise_argument,

@@ -9,6 +9,7 @@ import struct
 
 import pytest
 
+from app.audio.format import validate_utterance
 from app.audio.telephony import (
     CLIP,
     FRAME_BYTES,
@@ -23,8 +24,7 @@ from app.audio.telephony import (
     upsample_8k_to_16k,
     utterance_from_mulaw,
 )
-from app.audio.format import validate_utterance
-from app.providers.speech import PCM_S16LE, AudioFormat, build_wav, read_wav
+from app.providers.speech import PCM_S16LE, AudioFormat, build_wav
 from app.providers.tts import Speech
 
 SILENCE_CODE = 0xFF

@@ -28,7 +28,7 @@ would produce a number that looked like a bill and was not one.
 
 import logging
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from app.config import Settings, get_settings

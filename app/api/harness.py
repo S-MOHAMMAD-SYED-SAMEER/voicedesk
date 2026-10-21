@@ -30,11 +30,10 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+import anyio
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-
-import anyio
 
 from app.audio import AudioError, VoiceSession, VoiceTurn, utterance_from_bytes
 from app.config import Settings, get_settings

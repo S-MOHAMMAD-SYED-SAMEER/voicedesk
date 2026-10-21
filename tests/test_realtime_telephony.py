@@ -6,7 +6,6 @@ placed and no carrier behaviour is proved.
 """
 
 import base64
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,7 +20,6 @@ from app.providers.offline_streaming import (
 )
 
 from .conftest import (
-    TWILIO_CALL_SID,
     TWILIO_STREAM_SID,
     FakeModel,
     pcm_silence,
@@ -377,8 +375,6 @@ def test_with_realtime_off_the_utterance_path_runs(
     db_session: Session, realtime_telephony, twilio_call, open_weekdays, haircut
 ) -> None:
     """The default, and what the earlier milestone's tests still exercise."""
-    from app.providers.offline_stt import OfflineSpeechToText
-    from app.providers.offline_tts import OfflineTextToSpeech
 
     client, model = realtime_telephony(say("Certainly."), realtime_enabled=False)
 

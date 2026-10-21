@@ -10,12 +10,12 @@ A suite made only of happy paths would measure nothing.
 from app.evals.dataset.common import (
     ADA,
     BEA,
+    ELEVEN,
     HAIRCUT,
     MONDAY,
     NINE,
     NINE_THIRTY,
     TEN,
-    ELEVEN,
     haircut_only,
     salon,
 )
@@ -24,8 +24,8 @@ from app.evals.scenario import (
     AppointmentSpec,
     Beat,
     Claim,
-    ExpectedTool,
     Expectation,
+    ExpectedTool,
     Scenario,
     SeedAppointment,
     ServiceSpec,

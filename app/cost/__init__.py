@@ -14,7 +14,7 @@ customers and no payment processing here, and none are coming.
 """
 
 from app.cost.pricing import PriceBook, Priced, PricingError, Rates, price
-from app.cost.recorder import record_call_cost, record_turn_cost, recompute_total
+from app.cost.recorder import recompute_total, record_call_cost, record_turn_cost
 from app.cost.usage import (
     Usage,
     UsageError,

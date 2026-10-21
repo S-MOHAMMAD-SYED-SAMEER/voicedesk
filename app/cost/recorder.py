@@ -28,7 +28,7 @@ worth failing over an accounting row.
 
 import logging
 import uuid
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 from sqlalchemy import func, select, update

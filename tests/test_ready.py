@@ -17,7 +17,6 @@ from sqlalchemy import Engine
 from app.api import ready as ready_module
 from app.runtime import get_admission
 
-
 # --- liveness is unchanged -------------------------------------------------
 
 
@@ -115,7 +114,6 @@ def test_an_unmigrated_database_is_not_ready(
 ) -> None:
     """Measured against a real empty database, not a stubbed check."""
     from alembic import command
-
     from app.config import get_settings
     from app.db.session import reset_engine
 
