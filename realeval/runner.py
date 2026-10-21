@@ -16,7 +16,13 @@ from app.clock import fixed_clock
 from app.config import Settings
 from app.dialogue import Conversation
 from app.evals import world as worlds
-from app.evals.checks import UNDECLARED_CLAIM, Assessment, Finding, assess
+from app.evals.checks import (
+    UNDECLARED_CLAIM,
+    UNNECESSARY_ESCALATION,
+    Assessment,
+    Finding,
+    assess,
+)
 from app.evals.runner import EvalRunner, NoSpeechUsage, _turn_trace
 from app.evals.scenario import Scenario
 from app.evals.trace import CallTrace
@@ -66,8 +72,11 @@ class RealEvalRunner(EvalRunner):
         trace = self.run(item.scenario)
         trace.model_calls = getattr(self._model, "call_count", 0) - start
         assessment = assess(item.scenario, trace)
-        observations = [f for f in assessment.findings if f.category in OBSERVATION_CATEGORIES]
-        assessment.findings = [f for f in assessment.findings if f.category not in OBSERVATION_CATEGORIES]
+        observed = set(OBSERVATION_CATEGORIES)
+        if item.escalation_tolerated:
+            observed.add(UNNECESSARY_ESCALATION)
+        observations = [f for f in assessment.findings if f.category in observed]
+        assessment.findings = [f for f in assessment.findings if f.category not in observed]
         if not trace.failed_run:
             assessment.findings.extend(reply_findings(trace))
             assessment.findings.extend(

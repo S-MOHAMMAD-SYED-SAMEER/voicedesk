@@ -63,7 +63,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -128,7 +129,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -196,7 +198,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -278,12 +281,13 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
       "name": "book_missing_details",
-      "description": "The first message names a service and a time but no name or number; the second supplies them.",
+      "description": "The first message names a service and a time but no name or number; the second supplies them; the third confirms.",
       "now": "2026-03-01T12:00:00+00:00",
       "world": {
         "services": [
@@ -313,7 +317,8 @@
       },
       "caller_lines": [
         "I'd like a haircut tomorrow at two in the afternoon.",
-        "It's Ada Lovelace, 07700 900123. Yes, please book it."
+        "It's Ada Lovelace, 07700 900123.",
+        "Yes, please book it."
       ],
       "expect": {
         "task": "book",
@@ -343,7 +348,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -394,7 +400,8 @@
         ],
         "must_escalate": false,
         "appointment_book_at_the_end": [],
-        "staff_requests_recorded": null
+        "staff_requests_recorded": null,
+        "escalation_tolerated": false
       }
     },
     {
@@ -459,7 +466,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -524,7 +532,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -605,7 +614,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -686,7 +696,8 @@
             "status": "cancelled"
           }
         ],
-        "staff_requests_recorded": []
+        "staff_requests_recorded": [],
+        "escalation_tolerated": false
       }
     },
     {
@@ -755,7 +766,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": null
+        "staff_requests_recorded": null,
+        "escalation_tolerated": false
       }
     },
     {
@@ -814,7 +826,8 @@
         "appointment_book_at_the_end": [],
         "staff_requests_recorded": [
           "message"
-        ]
+        ],
+        "escalation_tolerated": false
       }
     },
     {
@@ -871,7 +884,8 @@
         "appointment_book_at_the_end": [],
         "staff_requests_recorded": [
           "transfer"
-        ]
+        ],
+        "escalation_tolerated": false
       }
     },
     {
@@ -928,7 +942,8 @@
         "appointment_book_at_the_end": [],
         "staff_requests_recorded": [
           "transfer"
-        ]
+        ],
+        "escalation_tolerated": false
       }
     },
     {
@@ -980,7 +995,8 @@
         ],
         "must_escalate": false,
         "appointment_book_at_the_end": [],
-        "staff_requests_recorded": null
+        "staff_requests_recorded": null,
+        "escalation_tolerated": false
       }
     },
     {
@@ -1036,7 +1052,9 @@
         "may_fail": [],
         "read_only_tools_tolerated": [
           "check_availability",
-          "find_appointments"
+          "find_appointments",
+          "take_message",
+          "transfer_to_human"
         ],
         "must_escalate": false,
         "appointment_book_at_the_end": [
@@ -1047,7 +1065,8 @@
             "status": "booked"
           }
         ],
-        "staff_requests_recorded": null
+        "staff_requests_recorded": null,
+        "escalation_tolerated": true
       }
     }
   ]
