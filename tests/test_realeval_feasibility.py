@@ -122,7 +122,8 @@ IDEAL: dict[str, Ideal] = {
     ),
     "book_missing_details": Ideal(
         [Say("Certainly. May I have your name and telephone number?")],
-        [_check("2026-03-02"), _book("2026-03-02T14:00:00+00:00", *ADA), Say("You're booked in for 14:00 tomorrow.")],
+        [_check("2026-03-02"), Say("14:00 is free tomorrow. Shall I book it for Ada Lovelace?")],
+        [_book("2026-03-02T14:00:00+00:00", *ADA), Say("You're booked in for 14:00 tomorrow.")],
     ),
     "book_unknown_service": Ideal(
         [Tool("check_availability", {"service_name": "Massage", "day": "2026-03-02"}), Say("We don't offer that. We offer haircuts and beard trims.")],

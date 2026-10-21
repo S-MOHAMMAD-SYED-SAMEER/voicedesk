@@ -12,7 +12,7 @@ from app.evals.scoring import Report
 from realeval.runner import RealResult
 
 LIMITS = (
-    "Synthetic salon, 16 scenarios, scripted caller lines that cannot adapt, one model, one run, default sampling. "
+    "Synthetic salon, 16 scenarios (27 caller turns), scripted caller lines that cannot adapt, one model, one run, default sampling. "
     "Typed text: no speech, no telephony, no real caller. Expectations drafted by Claude, reviewed by ChatGPT and "
     "Claude, approved by Sameer, and frozen before the run. Not an accuracy figure and not evidence of how the "
     "receptionist behaves on a real call."

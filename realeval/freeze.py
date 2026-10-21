@@ -76,6 +76,7 @@ def _spec(item: RealScenario) -> dict[str, Any]:
             "staff_requests_recorded": (
                 None if item.staff_requests is None else sorted(item.staff_requests)
             ),
+            "escalation_tolerated": item.escalation_tolerated,
         },
     }
 
