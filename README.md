@@ -1760,7 +1760,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (1,059 pass, 676 skip). With a database they all run: **1,735 pass** (the count CI reports), and no credential is needed for either. Point both
+one (1,114 pass, 719 skip). With a database they all run: **1,833 pass** (the count CI reports), and no credential is needed for either. Point both
 `VOICEDESK_TEST_DATABASE_URL` and `VOICEDESK_DATABASE_URL` at that server (the evaluation tests use the second).
 
 VoiceDesk is maintained as its own standalone repository, separate from
