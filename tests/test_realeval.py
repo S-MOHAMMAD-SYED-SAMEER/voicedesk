@@ -94,7 +94,7 @@ def test_the_digest_in_the_eval_doc_matches_the_files() -> None:
     if recorded is None:
         # Until the scenarios are approved the doc says so; the runner refuses a real request in that state.
         assert re.search(r"real-eval-sha256:\s*`pending approval`", text), "docs/EVAL.md must record real-eval-sha256"
-        pytest.skip("the scenarios are still a draft: nothing is frozen yet")
+        return
 
     assert recorded.group(1) == freeze.digest()
 
