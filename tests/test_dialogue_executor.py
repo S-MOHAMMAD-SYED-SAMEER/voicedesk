@@ -111,7 +111,9 @@ def test_an_argument_the_tool_does_not_take_is_a_failure_not_a_crash(
     executor: ToolExecutor, open_weekdays, haircut: Service
 ) -> None:
     block, record = _run(
-        executor, "cancel", {"appointment_id": str(uuid.uuid4()), "colour": "blue"}
+        executor,
+        "check_availability",
+        {"service_name": "Haircut", "day": "2026-03-02", "colour": "blue"},
     )
 
     assert record.success is False
@@ -122,7 +124,7 @@ def test_an_argument_the_tool_does_not_take_is_a_failure_not_a_crash(
 def test_a_missing_argument_is_a_failure_not_a_crash(
     executor: ToolExecutor, open_weekdays, haircut: Service
 ) -> None:
-    block, record = _run(executor, "cancel", {})
+    block, record = _run(executor, "check_availability", {"service_name": "Haircut"})
 
     assert record.success is False
     assert "could not be called with those arguments" in record.error

@@ -13,6 +13,7 @@ from app.models.business_hours import BusinessHours
 from app.models.call import Call, CallDirection, CallOutcome, ToolCall, Turn, TurnRole
 from app.models.call_cost import CallCost, CostComponent
 from app.models.service import Service
+from app.models.staff_request import StaffRequest, StaffRequestKind
 
 __all__ = [
     "NO_DOUBLE_BOOKING",
@@ -25,6 +26,8 @@ __all__ = [
     "CallOutcome",
     "CostComponent",
     "Service",
+    "StaffRequest",
+    "StaffRequestKind",
     "ToolCall",
     "Turn",
     "TurnRole",

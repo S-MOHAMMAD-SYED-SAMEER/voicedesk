@@ -37,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audio import VoiceSession, VoiceTurn
+from app.audio.holding import with_holding_line
 from app.audio.telephony import (
     FRAME_BYTES,
     TELEPHONY_SAMPLE_RATE,
@@ -574,8 +575,23 @@ async def _turn(socket: WebSocket, state: StreamState, mulaw: bytes) -> None:
         )
         return
 
+    voice = state.voice
+
+    async def ask() -> VoiceTurn:
+        return await anyio.to_thread.run_sync(voice.speak, audio)
+
+    async def hold() -> None:
+        # Spoken, not recorded: played down the line and nothing is saved.
+        speech = await anyio.to_thread.run_sync(
+            voice.greeting, state.settings.holding_line
+        )
+        if speech is not None:
+            await _send_audio(socket, state, speech)
+
     try:
-        turn: VoiceTurn = await anyio.to_thread.run_sync(state.voice.speak, audio)
+        turn: VoiceTurn = await with_holding_line(
+            ask, hold, after_seconds=state.settings.holding_line_after_seconds
+        )
     except Exception:  # noqa: BLE001 - one bad turn must not end the call
         logger.exception("A turn failed on call %s", state.call_sid)
         return

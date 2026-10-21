@@ -1,7 +1,7 @@
 # The exact package versions this milestone was tested against.
 #
 # Generated from the working virtualenv with `pip freeze`, so a build from
-# this file installs what the 1,653-test suite and the evaluation suite
+# this file installs what the test suite and the evaluation suite
 # actually ran on — not whatever happens to be newest on the day. The
 # Dockerfile installs from here and then installs the application itself
 # without dependencies, so a build cannot quietly resolve something else.

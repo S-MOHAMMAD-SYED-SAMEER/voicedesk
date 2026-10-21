@@ -114,13 +114,20 @@ def test_the_dialogue_layer_runs_no_queries_of_its_own() -> None:
 
 
 def test_the_dialogue_layer_touches_only_the_transcript_models() -> None:
-    """`turns` and `tool_calls` are milestone 4's to write. Nothing else is."""
+    """`turns` and `tool_calls` are the transcript; `staff_requests` backs what a caller is told. Nothing else is written."""
     imported = set()
     for module in _modules(DIALOGUE):
         for node in ast.walk(ast.parse(module.read_text())):
             if isinstance(node, ast.ImportFrom) and node.module == "app.models":
                 imported.update(alias.name for alias in node.names)
-    assert imported == {"Call", "ToolCall", "Turn", "TurnRole"}
+    assert imported == {
+        "Call",
+        "StaffRequest",
+        "StaffRequestKind",
+        "ToolCall",
+        "Turn",
+        "TurnRole",
+    }
 
 
 def test_tools_are_reached_only_through_the_registry() -> None:

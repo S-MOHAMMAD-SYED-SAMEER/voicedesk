@@ -269,6 +269,9 @@ def test_a_placeholder_becomes_the_real_identifier(runner) -> None:
             Beat(
                 "Cancel it",
                 (
+                    use_tools(
+                        ("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]})
+                    ),
                     use_tools(("cancel", {"appointment_id": "{{appointment:existing}}"})),
                     say("Cancelled."),
                 ),
@@ -279,8 +282,9 @@ def test_a_placeholder_becomes_the_real_identifier(runner) -> None:
 
     trace = runner.run(scenario)
 
-    assert trace.tool_calls[0].success is True
-    assert trace.tool_calls[0].arguments["appointment_id"] == trace.appointment_refs[
+    assert [call.tool_name for call in trace.tool_calls] == ["find_appointments", "cancel"]
+    assert trace.tool_calls[1].success is True
+    assert trace.tool_calls[1].arguments["appointment_id"] == trace.appointment_refs[
         "existing"
     ]
     assert trace.final_appointments[0].status == "cancelled"

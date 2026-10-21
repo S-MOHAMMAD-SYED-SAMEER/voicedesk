@@ -1,5 +1,10 @@
 """Moving and cancelling appointments that already exist.
 
+**Suite version m9-v2.** `reschedule` and `cancel` now work only on an appointment identifier the conversation was
+given by `find_appointments` (name **and** number matched) or by a booking made in the call, so every scenario here
+starts with the lookup a receptionist has to make. That changed what these four scenarios script, and the suite
+version moved with it; nothing was changed to make a result better.
+
 `reschedule_success` is where the frozen gap shows, and it is deliberately not
 papered over. `ToolExecutor` guards `book_appointment` against times the
 calendar never offered; it does not guard `reschedule`, and the milestone-4
@@ -52,6 +57,9 @@ RESCHEDULE_SUCCESS = Scenario(
             caller="Could we move my haircut to the afternoon?",
             responses=(
                 use_tools(
+                    ("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]})
+                ),
+                use_tools(
                     ("reschedule", {"appointment_id": EXISTING, "new_starts_at": TWO})
                 ),
                 # No numeral: this time was never offered, and a reply naming
@@ -63,10 +71,13 @@ RESCHEDULE_SUCCESS = Scenario(
     ),
     expect=Expectation(
         task="reschedule",
-        expected_tools=(ExpectedTool("reschedule", {"new_starts_at": TWO}),),
+        expected_tools=(
+            ExpectedTool("find_appointments", {"customer_name": ADA[0]}),
+            ExpectedTool("reschedule", {"new_starts_at": TWO}),
+        ),
         forbidden_tools=frozenset({"book_appointment"}),
         final_appointments=(AppointmentSpec(HAIRCUT, ADA[0], TWO),),
-        expected_model_calls=2,
+        expected_model_calls=3,
     ),
 )
 
@@ -87,6 +98,9 @@ RESCHEDULE_CONFLICT = Scenario(
             caller="Move my haircut to two o'clock.",
             responses=(
                 use_tools(
+                    ("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]})
+                ),
+                use_tools(
                     ("reschedule", {"appointment_id": EXISTING, "new_starts_at": TWO})
                 ),
                 say("Somebody has that time, I'm afraid. Shall I see what's left?"),
@@ -96,6 +110,7 @@ RESCHEDULE_CONFLICT = Scenario(
     expect=Expectation(
         task="decline",
         expected_tools=(
+            ExpectedTool("find_appointments", {"customer_name": ADA[0]}),
             ExpectedTool("reschedule", {"new_starts_at": TWO}, succeeds=False),
         ),
         allow_tool_failures=frozenset({"reschedule"}),
@@ -103,7 +118,7 @@ RESCHEDULE_CONFLICT = Scenario(
             AppointmentSpec(HAIRCUT, ADA[0], TEN),
             AppointmentSpec(HAIRCUT, BEA[0], TWO),
         ),
-        expected_model_calls=2,
+        expected_model_calls=3,
     ),
 )
 
@@ -117,6 +132,9 @@ CANCEL_SUCCESS = Scenario(
         Beat(
             caller="I need to cancel my haircut on Monday.",
             responses=(
+                use_tools(
+                    ("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]})
+                ),
                 use_tools(("cancel", {"appointment_id": EXISTING})),
                 say("That's cancelled. Ring us any time to rebook."),
             ),
@@ -124,12 +142,15 @@ CANCEL_SUCCESS = Scenario(
     ),
     expect=Expectation(
         task="cancel",
-        expected_tools=(ExpectedTool("cancel", {"appointment_id": EXISTING}),),
+        expected_tools=(
+            ExpectedTool("find_appointments", {"customer_name": ADA[0]}),
+            ExpectedTool("cancel", {"appointment_id": EXISTING}),
+        ),
         forbidden_tools=frozenset({"book_appointment"}),
         final_appointments=(
             AppointmentSpec(HAIRCUT, ADA[0], TEN, status="cancelled"),
         ),
-        expected_model_calls=2,
+        expected_model_calls=3,
     ),
 )
 
@@ -138,8 +159,9 @@ CANCEL_ALREADY_CANCELLED = Scenario(
     name="cancel_already_cancelled",
     kind="text",
     description=(
-        "Cancelling something already cancelled. The tool refuses, and the "
-        "caller is told plainly rather than told it worked."
+        "The caller's only booking was already cancelled. The lookup finds "
+        "nothing upcoming, so no cancellation is attempted, and the caller is "
+        "told plainly there is nothing booked rather than told it worked."
     ),
     world=_with(
         SeedAppointment("existing", HAIRCUT, ADA[0], ADA[1], TEN, cancelled=True)
@@ -148,17 +170,17 @@ CANCEL_ALREADY_CANCELLED = Scenario(
         Beat(
             caller="Can you cancel my haircut?",
             responses=(
-                use_tools(("cancel", {"appointment_id": EXISTING})),
-                say("That one is already cancelled — there's nothing booked."),
+                use_tools(
+                    ("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]})
+                ),
+                say("I can't find anything booked under that name and number."),
             ),
         ),
     ),
     expect=Expectation(
         task="decline",
-        expected_tools=(
-            ExpectedTool("cancel", {"appointment_id": EXISTING}, succeeds=False),
-        ),
-        allow_tool_failures=frozenset({"cancel"}),
+        expected_tools=(ExpectedTool("find_appointments", {"customer_name": ADA[0]}),),
+        forbidden_tools=frozenset({"cancel", "book_appointment"}),
         final_appointments=(
             AppointmentSpec(HAIRCUT, ADA[0], TEN, status="cancelled"),
         ),

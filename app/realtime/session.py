@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 import anyio
 
 from app.audio.endpoint import Endpointer, SpeechEnded, SpeechStarted
+from app.audio.holding import with_holding_line
 from app.audio.vad import VoiceActivityDetector
 from app.config import Settings, get_settings
 from app.dialogue import Conversation, DialogueResult
@@ -334,8 +335,20 @@ class RealtimeSession:
         # Off the event loop: a model request, tool calls and the database,
         # while the caller keeps talking. `Conversation` is unchanged and
         # still entirely synchronous.
-        result = await anyio.to_thread.run_sync(
-            self._conversation.send, final.text, abandon_on_cancel=True
+        # If the model takes a while, the caller hears the holding line once; its timing is
+        # kept apart so it is never mistaken for the reply's first audio.
+        async def ask() -> DialogueResult:
+            return await anyio.to_thread.run_sync(
+                self._conversation.send, final.text, abandon_on_cancel=True
+            )
+
+        async def hold() -> None:
+            await self._speak(
+                self._settings.holding_line, generation, TurnTiming(), None
+            )
+
+        result = await with_holding_line(
+            ask, hold, after_seconds=self._settings.holding_line_after_seconds
         )
         turn.timing.dialogue_end = self._clock()
         turn.dialogue = result

@@ -127,10 +127,10 @@ def test_each_new_module_is_there() -> None:
 # --- no schema change ------------------------------------------------------
 
 
-def test_there_are_still_exactly_three_migrations() -> None:
+def test_there_are_exactly_four_migrations() -> None:
     versions = ROOT / "alembic" / "versions"
 
-    assert len(list(versions.glob("*.py"))) == 3
+    assert len(list(versions.glob("*.py"))) == 4
 
 
 def test_no_table_was_added() -> None:
@@ -146,6 +146,7 @@ def test_no_table_was_added() -> None:
         "services",
         "business_hours",
         "call_costs",
+        "staff_requests",
     }
 
 
@@ -207,12 +208,13 @@ def test_the_route_set_gained_exactly_one_path() -> None:
     assert paths == {"/health", "/ready", "/harness", "/telephony/voice"}
 
 
-def test_the_six_tools_are_still_the_six_tools() -> None:
-    """No tool was added, removed or renamed."""
+def test_the_tools_are_the_six_and_the_lookup() -> None:
+    """The six the specification names, and `find_appointments`: nothing else was added or renamed."""
     from app.tools import TOOLS
 
     assert set(TOOLS) == {
         "check_availability",
+        "find_appointments",
         "book_appointment",
         "reschedule",
         "cancel",

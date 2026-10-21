@@ -126,11 +126,14 @@ Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and com
 
 ## Implementation status
 
-**Milestones 1 to 10 are implemented.** Milestone 8 here is the
-specification's *Cost tracking* section, milestone 9 its *Evals* section, and
-milestone 10 is production readiness; post-call SMS or email confirmation is
-not built. Everything above this line is the specification; everything below
-describes only what exists today.
+**Milestones 1 to 10 are implemented, and the changes made before the first real-model run (below, "Before the first
+real-model run") are in.** Milestone 8 here is the specification's *Cost tracking* section, milestone 9 its *Evals*
+section, and milestone 10 is production readiness; post-call SMS or email confirmation is not built. Everything above
+this line is the specification; everything below describes only what exists today.
+
+**Tests:** the count is whatever the latest [CI run](https://github.com/S-MOHAMMAD-SYED-SAMEER/voicedesk/actions)
+reports; CI runs ruff and the whole suite against PostgreSQL, the pinned requirements and the no-database tests on
+Windows, the Docker image and compose stack, and a dependency audit. No credential is set anywhere in CI.
 
 ### What milestone 1 built
 
@@ -863,11 +866,14 @@ added — there are still two.**
 python -m app.metrics           # or --call <id> for one call
 ```
 
+**The table below is a scripted sample, not a measurement.** It shows the shape of the output with invented
+numbers; no real turn has ever been timed, because no real provider has ever been called.
+
 ```
 metric                         count       p50       p95
 --------------------------------------------------------
-first_audio_latency_ms            34       910      1420
-caller_audio_ms                   34      1800      3100
+first_audio_latency_ms            34       910      1420      <- invented, to show the format
+caller_audio_ms                   34      1800      3100      <- invented, to show the format
 ```
 
 Percentiles come from `statistics.quantiles`. Rows from before realtime have
@@ -1364,7 +1370,7 @@ does not matter teaches operators to skim the list.
 Every problem is reported in one failure, by name, with no value quoted — one
 variable per restart is a bad way to fix a deployment.
 
-**Nothing is required anywhere else.** A fresh clone, the 1,661-test suite and
+**Nothing is required anywhere else.** A fresh clone, the whole test suite and
 `python -m app.evals` all run offline with no credential, and
 `tests/test_production_config.py` asserts both halves of that: what production
 demands, and what nothing else may be made to demand.
@@ -1606,6 +1612,32 @@ exactly as unproved as the rest of this section says.
 | D14 | `requirements.txt` from `pip freeze`, nothing upgraded | A hardening milestone that also moved twelve versions would be two milestones |
 | D15 | Docker gate marked environment-blocked at milestone 10, then run for real once a daemon was reachable | No daemon was available then; claiming a build that never ran is the one thing worse than not running it — so the gate was verified for real as soon as it could be, rather than the claim being upgraded without evidence |
 
+### Before the first real-model run
+
+Nothing in this repository had ever been run against a real model, and an audit found what a first real call would
+have hit. These changes were made, with tests, before any real request:
+
+| Change | What it does |
+|---|---|
+| **The model is told the time** | Every caller turn the model is given the current date, time and time zone, `tomorrow` spelled out, and the next 14 days with their weekdays (`app/dialogue/prompt.py`, `clock_context`). The constant prompt is unchanged; this is appended after it. The clock is injected (`app/clock.py`), so an evaluation or a test can say what time it is |
+| **The calendar refuses the past** | `CalendarService` never offers a start time that has passed and refuses to book or move to one (`SlotInThePast`) |
+| **Existing bookings** | A seventh tool, `find_appointments`, finds a caller's upcoming bookings by **name and telephone number together** (the last nine digits of the number, so `07700 900123` and `+44 7700 900123` match). `reschedule` and `cancel` now run only on an appointment identifier the conversation was given by that lookup or by a booking made in the same call. It is not strong authentication: anyone who knows a customer's name and number can find their bookings |
+| **No promise of a live person** | Nothing can connect a caller to anyone. `transfer_to_human` now stores a *request that the team call back* (table `staff_requests`, fourth migration) and tells the model what it may say; `take_message` stores the message; a failed turn stores a request too, so "the team will call you back" always has a row behind it. The prompt and the fixed failure replies were reworded ("I've noted your call and the team will call you back") and tested never to say colleague, transfer or "put you through" |
+| **A staff view** | `GET /staff` (and `/staff/requests`, JSON) lists those requests, newest first. Open outside production, like the harness; closed in production unless `VOICEDESK_STAFF_VIEW_TOKEN` is set, and then it needs that token as a bearer credential. Read-only |
+| **The model call is bounded** | 15 s timeout (`VOICEDESK_DIALOGUE_TIMEOUT_SECONDS`), SDK `max_retries=0` said explicitly (`VOICEDESK_DIALOGUE_MAX_RETRIES`), default model `claude-haiku-4-5`. Adaptive thinking and effort are sent only if configured, because not every model accepts them |
+| **A holding line** | If a model request takes longer than 2 s (`VOICEDESK_HOLDING_LINE_AFTER_SECONDS`) the caller hears "One moment, let me check." (`VOICEDESK_HOLDING_LINE`) once, by whichever of the three transports is in use. It is never cut off, never written to the transcript and never sent to the model |
+| **A key from either name** | `VOICEDESK_ANTHROPIC_API_KEY` or the SDK's own `ANTHROPIC_API_KEY` |
+| **Repository** | CI, an MIT licence, ruff, `requirements.txt` installable on Windows (`uvloop` only where it exists) |
+
+The scripted evaluation suite moved to version **m9-v2**: reschedule and cancel now start with the lookup a
+receptionist has to make, and `cancel_already_cancelled` became "the lookup finds nothing". Nothing was changed to make
+a number better. The tests that diffed the repository against the milestone-8 and milestone-9 commits were retired:
+they were review aids for those milestones, and the structural boundary tests remain.
+
+What is still true after these changes: **no real service has been called**, the scripted suite scores a scripted model
+and says nothing about Claude, and the speech in the browser harness is simulated locally (a fixed transcript and a
+tone) with no real phone line.
+
 ### Deliberately not built yet
 
 No outbound calling, SMS, email or actual transfer. **No billing:** there is no Stripe, no invoice, no subscription,
@@ -1620,12 +1652,12 @@ verified; none of their behaviour is. No accuracy, latency, quality or cost
 number is claimed for any of them; that starts with the milestone-9 scenario
 evals.
 
-`transfer_to_human` records the intent to escalate and the reason. Actually
-connecting the caller to a person is not implemented.
+`transfer_to_human` records a request that the team call the caller back, with the reason, and the staff view shows it.
+Actually connecting the caller to a person is not implemented, and the receptionist is told never to say it is.
 
 There is **no dialogue API and no booking API**: the calendar core, the tool
 layer and the dialogue layer are libraries. The HTTP surface is `GET /health`,
-`GET /ready`, `GET /harness` and `POST /telephony/voice`, plus two sockets —
+`GET /ready`, `GET /harness`, `GET /staff` (and `/staff/requests`) and `POST /telephony/voice`, plus two sockets —
 `WS /ws/harness` and `WS /telephony/stream`. In production the harness is
 absent and so is the documentation surface.
 
@@ -1718,8 +1750,8 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (1,053 pass, 613 skip). With a database: **1,666 pass**, and no credential
-is needed for either.
+one. With a database they all run, and no credential is needed for either. Point both
+`VOICEDESK_TEST_DATABASE_URL` and `VOICEDESK_DATABASE_URL` at that server (the evaluation tests use the second).
 
 VoiceDesk is maintained as its own standalone repository, separate from
 DocIntel: its own package, dependencies, virtualenv, configuration prefix and

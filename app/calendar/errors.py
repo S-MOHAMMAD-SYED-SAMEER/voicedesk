@@ -37,6 +37,14 @@ class OutsideBusinessHours(CalendarError):
     """The interval does not fit inside a single configured opening period."""
 
 
+class SlotInThePast(CalendarError):
+    """The start time has already gone.
+
+    Refused by the calendar itself, not left to the dialogue layer: a model that has been given the wrong date, or a
+    caller who names a time that has passed, must not be able to put an appointment in the past.
+    """
+
+
 class SlotUnavailable(CalendarError):
     """The staff member is already booked across part of that interval.
 

@@ -2,10 +2,15 @@
 
 Everything callable goes through `app.tools.get_tool`. This module adds no
 tool of its own, reaches no database, and knows nothing about calendars. What
-it does add is the one guard the prompt cannot enforce:
+it does add are the guards the prompt cannot enforce. The first:
 
     `book_appointment` may only run for a start time that a *successful*
     `check_availability` returned earlier in this conversation.
+
+`reschedule` and `cancel` may only run for an appointment identifier that this
+conversation has actually been given: one returned by `find_appointments`
+(which matches the caller's name **and** number) or by a booking made in this
+call. A model cannot reach a booking by inventing or recalling an identifier.
 
 The specification requires a hallucinated-availability rate of zero. A prompt
 can ask for that; only code can guarantee it. The ledger below is that code —
@@ -46,6 +51,12 @@ class ToolCallRecord:
     latency_ms: int | None = None
 
 
+UNKNOWN_APPOINTMENT = (
+    "That appointment identifier has not been given in this conversation, so it "
+    "cannot be changed. Call find_appointments with the caller's name and "
+    "telephone number first, then use an identifier it returns."
+)
+
 UNVERIFIED_SLOT = (
     "That start time was not offered by check_availability in this "
     "conversation, so it has not been verified and cannot be booked. Call "
@@ -61,6 +72,9 @@ class ToolExecutor:
         self._context = context
         # (service name, instant) pairs the calendar has actually offered.
         self._offered: set[tuple[str, datetime]] = set()
+        # Appointment identifiers this conversation has been handed, by a lookup that
+        # matched the caller or by a booking made in this call.
+        self._known_appointments: set[str] = set()
 
     # --- the ledger --------------------------------------------------------
 
@@ -103,6 +117,21 @@ class ToolExecutor:
             return True
         return key in self._offered
 
+    def _appointment_known(self, arguments: dict[str, Any]) -> bool:
+        return str(arguments.get("appointment_id", "")).strip().lower() in (
+            self._known_appointments
+        )
+
+    def _record_appointments(self, tool_name: str, result: ToolResult) -> None:
+        """Remember the identifiers a lookup or a booking has just handed over."""
+        if tool_name == "find_appointments":
+            for item in result.data.get("appointments", []):
+                self._known_appointments.add(str(item.get("appointment_id", "")).lower())
+        elif tool_name == "book_appointment":
+            identifier = result.data.get("appointment_id")
+            if identifier:
+                self._known_appointments.add(str(identifier).lower())
+
     # --- dispatch ----------------------------------------------------------
 
     def execute(self, tool_use: ToolUse) -> tuple[dict[str, Any], ToolCallRecord]:
@@ -127,6 +156,15 @@ class ToolExecutor:
                 tool_use, ToolResult.failed(str(exc)), arguments, latency_ms=0
             )
 
+        if tool_use.name in ("reschedule", "cancel") and not self._appointment_known(
+            arguments
+        ):
+            return self._finish(
+                tool_use,
+                ToolResult.failed(UNKNOWN_APPOINTMENT, unknown_appointment=True),
+                arguments,
+                latency_ms=0,
+            )
         if tool_use.name == "book_appointment" and not self._verified(arguments):
             return self._finish(
                 tool_use,
@@ -149,6 +187,8 @@ class ToolExecutor:
 
         if tool_use.name == "check_availability" and result.success:
             self._record_offer(result)
+        if result.success:
+            self._record_appointments(tool_use.name, result)
 
         return self._finish(tool_use, result, arguments, latency_ms=latency_ms)
 

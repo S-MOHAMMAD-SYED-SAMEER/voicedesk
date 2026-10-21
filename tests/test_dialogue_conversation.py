@@ -61,9 +61,11 @@ def test_the_model_is_given_the_system_prompt_and_the_tools(
 
     request = model.requests[0]
     assert "- Haircut" in request["system"]
-    assert request["system"] == conversation.system_prompt
+    assert request["system"].startswith(conversation.system_prompt)
+    assert "# Right now" in request["system"]
     assert [tool.name for tool in request["tools"]] == [
         "check_availability",
+        "find_appointments",
         "book_appointment",
         "reschedule",
         "cancel",

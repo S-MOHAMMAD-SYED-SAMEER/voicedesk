@@ -39,7 +39,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import harness, health, ready
+from app.api import harness, health, ready, staff
 from app.config import Settings, get_settings
 from app.logging import configure as configure_logging
 from app.preflight import check as preflight
@@ -77,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(ready.router)
     app.include_router(harness.router)
+    app.include_router(staff.router)
     app.include_router(telephony_router)
     app.add_exception_handler(Exception, _unhandled)
     return app

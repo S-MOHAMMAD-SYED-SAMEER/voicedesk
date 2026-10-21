@@ -223,10 +223,10 @@ def test_the_evaluator_writes_no_cost_row_of_its_own() -> None:
 # --- no migration ----------------------------------------------------------
 
 
-def test_there_are_still_exactly_three_migrations() -> None:
+def test_there_are_exactly_four_migrations() -> None:
     versions = ROOT / "alembic" / "versions"
 
-    assert len(list(versions.glob("*.py"))) == 3
+    assert len(list(versions.glob("*.py"))) == 4
 
 
 def test_the_evaluator_adds_no_table() -> None:
@@ -241,6 +241,7 @@ def test_the_evaluator_adds_no_table() -> None:
         "services",
         "business_hours",
         "call_costs",
+        "staff_requests",
     }
 
 

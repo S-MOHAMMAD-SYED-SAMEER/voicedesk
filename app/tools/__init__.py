@@ -1,6 +1,6 @@
 """The tool layer: the only things a model is allowed to do.
 
-Six tools, one module each, every one a plain function that takes a
+Seven tools, one module each, every one a plain function that takes a
 `ToolContext` and keyword arguments and returns a `ToolResult`. They are
 callable from a test with a database session and nothing else — no audio, no
 telephony, no model.
@@ -16,7 +16,7 @@ Failures are returned, not raised. A model that asks for a slot that has just
 gone needs to be told so in a way it can act on; an exception would end the
 turn instead.
 
-`TOOLS` maps the six names in the specification to those functions. The
+`TOOLS` maps the names to those functions (the specification's six, and `find_appointments`). The
 dialogue layer in milestone 4 builds its tool definitions from this registry
 rather than keeping a second list that can drift out of step.
 """
@@ -32,12 +32,14 @@ from app.tools.base import (
 from app.tools.book_appointment import book_appointment
 from app.tools.cancel import cancel
 from app.tools.check_availability import check_availability
+from app.tools.find_appointments import find_appointments
 from app.tools.reschedule import reschedule
 from app.tools.take_message import take_message
 from app.tools.transfer_to_human import transfer_to_human
 
 TOOLS: dict[str, Callable[..., ToolResult]] = {
     "check_availability": check_availability,
+    "find_appointments": find_appointments,
     "book_appointment": book_appointment,
     "reschedule": reschedule,
     "cancel": cancel,
@@ -75,6 +77,7 @@ __all__ = [
     "book_appointment",
     "cancel",
     "check_availability",
+    "find_appointments",
     "get_tool",
     "reschedule",
     "take_message",

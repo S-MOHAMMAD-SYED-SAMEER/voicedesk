@@ -67,7 +67,7 @@ def test_the_whole_suite_runs(evaluated) -> None:
 
 
 def test_the_suite_reports_the_version_it_ran_under(evaluated) -> None:
-    assert evaluated.version == EVAL_SUITE_VERSION == "m9-v1"
+    assert evaluated.version == EVAL_SUITE_VERSION == "m9-v2"
 
 
 def test_no_availability_is_ever_hallucinated(evaluated) -> None:
@@ -117,8 +117,8 @@ def test_the_reschedule_conflict_now_completes(evaluated) -> None:
     assert result.passed is True
     assert result.assessment.findings == []
     assert result.trace.error is None
-    # The move was still refused, and nothing moved.
-    assert [record.success for record in result.trace.tool_calls] == [False]
+    # The lookup found the booking; the move was still refused, and nothing moved.
+    assert [record.success for record in result.trace.tool_calls] == [True, False]
     assert len(result.trace.final_appointments) == 2
 
 

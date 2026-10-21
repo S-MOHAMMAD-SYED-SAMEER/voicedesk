@@ -35,6 +35,11 @@ from app.tools.base import ToolArgumentError, parse_instant
 # the dataset's fixed dates have to mean the same thing everywhere.
 EVAL_TIMEZONE = "UTC"
 
+# What time it is during an evaluation: the Sunday before the fixed week the dataset happens in. The calendar refuses a
+# time that has passed and the model is told the date every turn, so a scenario needs a clock; this one is the same on
+# every machine, which is the point.
+EVAL_NOW = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)
+
 KINDS = ("text", "realtime")
 TASKS = ("book", "reschedule", "cancel", "message", "escalate", "decline")
 
@@ -422,6 +427,7 @@ def _require_instant(scenario: Scenario, value: Any, what: str) -> None:
 
 
 __all__ = [
+    "EVAL_NOW",
     "EVAL_TIMEZONE",
     "KINDS",
     "TASKS",

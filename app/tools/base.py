@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.calendar import CalendarService
+from app.clock import Clock, default_clock
 from app.config import Settings, get_settings
 from app.models import Service
 
@@ -63,9 +64,16 @@ class ToolContext:
     session: Session
     settings: Settings | None = None
     call_id: uuid.UUID | None = None
+    # What time it is. None means the system's; an evaluation or a test supplies its own.
+    clock: Clock | None = None
+
+    def now(self) -> datetime:
+        return (self.clock or default_clock())()
 
     def calendar(self) -> CalendarService:
-        return CalendarService(self.session, self.settings or get_settings())
+        return CalendarService(
+            self.session, self.settings or get_settings(), clock=self.clock
+        )
 
     def timezone(self) -> ZoneInfo:
         return ZoneInfo((self.settings or get_settings()).business_timezone)

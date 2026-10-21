@@ -1,4 +1,4 @@
-"""The registry: six tools, named as the specification names them."""
+"""The registry: the six tools the specification names, and the lookup that reschedule and cancel depend on."""
 
 import inspect
 
@@ -8,6 +8,7 @@ from app.tools import TOOLS, ToolContext, ToolResult, UnknownTool, get_tool
 
 SPECIFIED = {
     "check_availability",
+    "find_appointments",
     "book_appointment",
     "reschedule",
     "cancel",
@@ -16,7 +17,7 @@ SPECIFIED = {
 }
 
 
-def test_the_registry_holds_exactly_the_specified_tools() -> None:
+def test_the_registry_holds_exactly_the_expected_tools() -> None:
     assert set(TOOLS) == SPECIFIED
 
 

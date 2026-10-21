@@ -1,6 +1,5 @@
 """`transfer_to_human` — recording an escalation, not performing one."""
 
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,9 +17,9 @@ def test_an_escalation_records_its_reason(tools: ToolContext) -> None:
 
 
 def test_the_escalation_carries_the_call_it_belongs_to(
-    session: Session, calendar_settings
+    session: Session, calendar_settings, call
 ) -> None:
-    call_id = uuid.uuid4()
+    call_id = call.id
     context = ToolContext(
         session=session, settings=calendar_settings, call_id=call_id
     )

@@ -1,5 +1,6 @@
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 import sqlalchemy
@@ -22,6 +23,16 @@ TEST_DATABASE_URL = os.environ.get(
     "VOICEDESK_TEST_DATABASE_URL",
     "postgresql+psycopg://voicedesk:voicedesk@localhost:5432/voicedesk_test",
 )
+
+
+# Every date in the suite is in March 2026. The calendar refuses a start time that has passed, so the suite runs on a
+# clock that says it is the Saturday before that month; a test that is about the clock overrides it with its own.
+SUITE_NOW = datetime(2026, 2, 28, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _suite_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.clock.system_clock", lambda: SUITE_NOW)
 
 
 @pytest.fixture
@@ -191,6 +202,20 @@ class FakeModel:
     @property
     def call_count(self) -> int:
         return len(self.requests)
+
+
+class SlowModel(FakeModel):
+    """A model that takes its time answering: for the holding line."""
+
+    def __init__(self, *responses, seconds: float) -> None:
+        super().__init__(*responses)
+        self._seconds = seconds
+
+    def respond(self, *, system, messages, tools):
+        import time
+
+        time.sleep(self._seconds)
+        return super().respond(system=system, messages=messages, tools=tools)
 
 
 def say(text: str, *, latency_ms: int = 12):
