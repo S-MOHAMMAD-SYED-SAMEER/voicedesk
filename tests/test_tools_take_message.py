@@ -1,6 +1,5 @@
 """`take_message` — the graceful exit when the calendar cannot help."""
 
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,9 +23,9 @@ def test_a_message_comes_back_whole(tools: ToolContext) -> None:
 
 
 def test_the_message_carries_the_call_it_belongs_to(
-    session: Session, calendar_settings
+    session: Session, calendar_settings, call
 ) -> None:
-    call_id = uuid.uuid4()
+    call_id = call.id
     context = ToolContext(
         session=session, settings=calendar_settings, call_id=call_id
     )

@@ -12,7 +12,7 @@ belongs to the milestone that introduces it and is deliberately absent.
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # What `output_config.effort` accepts, shallowest first.
@@ -50,6 +50,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_name: str = "VoiceDesk"
@@ -79,15 +80,23 @@ class Settings(BaseSettings):
     # Empty by default so nothing in the repository implies a credential. The
     # SDK falls back to its own environment resolution when this is blank, and
     # no test ever needs a key: the model is injected.
-    anthropic_api_key: str = ""
-    dialogue_model: str = "claude-opus-5"
+    # Read from `VOICEDESK_ANTHROPIC_API_KEY`, or from the SDK's own `ANTHROPIC_API_KEY` (a `.env` that already holds
+    # that name works without being edited).
+    anthropic_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "VOICEDESK_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"
+        ),
+    )
+    dialogue_model: str = "claude-haiku-4-5"
     # A receptionist answers in about two sentences. The ceiling is for a turn
     # that also carries tool calls.
     dialogue_max_tokens: int = Field(default=1024, gt=0)
-    # Thinking depth. The specification's latency budget is 1.2 seconds from
-    # the caller stopping to the agent speaking, so the default is the
-    # shallowest setting rather than the API's own default of `high`.
-    dialogue_effort: str = "low"
+    # Neither is sent unless set. The specification's latency budget is 1.2 seconds from the caller stopping to the
+    # agent speaking, so the default asks for no thinking at all, and not every model accepts these parameters: send
+    # them only to a model known to (`VOICEDESK_DIALOGUE_THINKING=true` is adaptive thinking; effort is its depth).
+    dialogue_thinking: bool = False
+    dialogue_effort: str = ""
     # How many times one caller turn may go round the model/tool loop before
     # the dialogue layer stops it. Reaching this is a failure, not an answer.
     max_tool_iterations: int = Field(default=8, gt=0)
@@ -204,6 +213,12 @@ class Settings(BaseSettings):
     # see `Settings.harness_available`. The switch exists so a shared staging
     # deployment can turn it off too.
     harness_enabled: bool = True
+    # --- Staff view ---
+    # `/staff` lists what the team has to deal with: messages, callback requests and failures. Open outside
+    # production, as the harness is; in production it is closed unless a token is set, and then it needs that token as
+    # a bearer credential. It is a read-only page, not a back office.
+    staff_view_enabled: bool = True
+    staff_view_token: str = ""
     # Two harness-only bounds, read nowhere but `app/api/harness.py`. Not a
     # substitute for `max_call_seconds` (telephony's own limit, enforced only
     # in `app/telephony/stream.py` and left unchanged by these) and not a
@@ -253,7 +268,16 @@ class Settings(BaseSettings):
     # The model request runs on a worker thread and a timeout there cannot
     # kill that thread — it ends the *wait*, and the abandoned request
     # finishes into nothing. See the README.
-    dialogue_timeout_seconds: float = Field(default=30.0, gt=0)
+    #
+    # Fifteen seconds: a caller who has heard nothing for that long has hung up. The timeout is for the whole request.
+    dialogue_timeout_seconds: float = Field(default=15.0, gt=0)
+    # The SDK retries by itself unless told not to (twice, by default), which could triple the silence on a call and
+    # makes a request count impossible to keep. Zero, said explicitly; a retry is a decision, not a default.
+    dialogue_max_retries: int = Field(default=0, ge=0)
+    # While a model request runs, the caller hears this once if it takes longer than the delay. Spoken by the same
+    # speech provider as the replies; never written to the transcript, never sent to the model.
+    holding_line: str = "One moment, let me check."
+    holding_line_after_seconds: float = Field(default=2.0, gt=0)
     stream_connect_timeout_seconds: float = Field(default=10.0, gt=0)
     # Between messages, not for the whole stream: a synthesiser sending audio
     # steadily is working, however long the reply is.
@@ -272,6 +296,13 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment.strip().lower() == PRODUCTION
+
+    @property
+    def staff_view_available(self) -> bool:
+        """Whether `/staff` is served at all: enabled, and in production only with a token configured."""
+        if not self.staff_view_enabled:
+            return False
+        return not self.is_production or bool(self.staff_view_token)
 
     @property
     def harness_available(self) -> bool:
@@ -348,7 +379,7 @@ class Settings(BaseSettings):
     @field_validator("dialogue_effort")
     @classmethod
     def _known_effort(cls, value: str) -> str:
-        if value not in EFFORT_LEVELS:
+        if value and value not in EFFORT_LEVELS:
             raise ValueError(
                 f"{value!r} is not an effort level; use one of "
                 f"{', '.join(EFFORT_LEVELS)}"

@@ -14,7 +14,7 @@ from app.models import Service
 
 
 def test_the_version_is_a_stable_constant() -> None:
-    assert SYSTEM_PROMPT_VERSION == "m4.1"
+    assert SYSTEM_PROMPT_VERSION == "p3.1"
 
 
 def test_the_prompt_never_invents_availability() -> None:

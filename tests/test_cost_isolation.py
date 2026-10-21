@@ -224,7 +224,14 @@ def test_the_dialogue_layer_still_writes_only_its_own_rows() -> None:
             if isinstance(node, ast.ImportFrom) and node.module == "app.models":
                 imported.update(alias.name for alias in node.names)
 
-    assert imported == {"Call", "ToolCall", "Turn", "TurnRole"}
+    assert imported == {
+        "Call",
+        "StaffRequest",
+        "StaffRequestKind",
+        "ToolCall",
+        "Turn",
+        "TurnRole",
+    }
 
 
 def test_only_the_latency_writer_still_touches_a_model_in_realtime() -> None:

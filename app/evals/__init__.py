@@ -29,6 +29,6 @@ a comparison of values the system produced against values a scenario declared.
 # rule. Adding a scenario does not need a bump; redefining what passing means
 # does. Reported at the top of every run, so a number can always be traced to
 # the rules that produced it.
-EVAL_SUITE_VERSION = "m9-v1"
+EVAL_SUITE_VERSION = "m9-v2"
 
 __all__ = ["EVAL_SUITE_VERSION"]

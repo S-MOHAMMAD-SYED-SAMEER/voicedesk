@@ -36,6 +36,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.audio import AudioError, VoiceSession, VoiceTurn, utterance_from_bytes
+from app.audio.holding import with_holding_line
 from app.config import Settings, get_settings
 from app.cost import record_turn_cost
 from app.db.session import get_sessionmaker
@@ -373,8 +374,24 @@ async def _converse(
             await _error(socket, "invalid_audio", str(exc))
             continue
 
+        async def ask() -> VoiceTurn:
+            return await anyio.to_thread.run_sync(voice.speak, audio)
+
+        async def hold() -> None:
+            # Spoken, not recorded: the page plays the audio and shows the line, and nothing is saved.
+            speech = await anyio.to_thread.run_sync(
+                voice.greeting, settings.holding_line
+            )
+            if speech is not None:
+                await socket.send_json(
+                    {"type": "holding", "text": settings.holding_line}
+                )
+                await socket.send_bytes(speech.audio)
+
         try:
-            turn = await anyio.to_thread.run_sync(voice.speak, audio)
+            turn = await with_holding_line(
+                ask, hold, after_seconds=settings.holding_line_after_seconds
+            )
         except Exception as exc:  # noqa: BLE001 - one bad turn must not end the call
             # `VoiceSession` converts every failure it anticipates into a
             # `VoiceTurn`. Anything reaching here is unanticipated — a

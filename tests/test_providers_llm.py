@@ -150,6 +150,7 @@ def test_the_model_max_tokens_and_effort_come_from_settings() -> None:
             dialogue_model="claude-sonnet-5",
             dialogue_max_tokens=512,
             dialogue_effort="medium",
+            dialogue_thinking=True,
         ),
     )
 
@@ -164,12 +165,25 @@ def test_the_model_max_tokens_and_effort_come_from_settings() -> None:
 
 def test_thinking_is_adaptive_rather_than_a_token_budget() -> None:
     """The budgeted form is removed on current models."""
-    model, client = _model(StubResponse([{"type": "text", "text": "hi"}]))
+    client = StubClient(StubResponse([{"type": "text", "text": "hi"}]))
+    model = AnthropicLanguageModel(
+        client=client, settings=Settings(_env_file=None, dialogue_thinking=True)
+    )
 
     model.respond(system="s", messages=MESSAGES, tools=TOOLS)
 
     assert client.messages.request["thinking"] == {"type": "adaptive"}
     assert "budget_tokens" not in str(client.messages.request)
+
+
+def test_thinking_and_effort_are_not_sent_unless_configured() -> None:
+    """Not every model accepts them, and a receptionist is on a latency budget."""
+    model, client = _model(StubResponse([{"type": "text", "text": "hi"}]))
+
+    model.respond(system="s", messages=MESSAGES, tools=TOOLS)
+
+    assert "thinking" not in client.messages.request
+    assert "output_config" not in client.messages.request
 
 
 def test_explicit_arguments_override_settings() -> None:

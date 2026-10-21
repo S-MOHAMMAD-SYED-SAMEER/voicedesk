@@ -198,6 +198,8 @@ async function connect() {
       add('agent', message.greeting, 'greeting — not a transcript turn');
     } else if (message.type === 'partial') {
       showPartial(message.text);
+    } else if (message.type === 'holding') {
+      add('agent', message.text, 'holding line — spoken while the model works, not saved');
     } else if (message.type === 'clear') {
       stopPlayback();
       add('system', 'interrupted — queued audio discarded');

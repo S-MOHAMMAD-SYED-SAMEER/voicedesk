@@ -15,6 +15,7 @@ from app.calendar.errors import (
     InvalidServiceDuration,
     OutsideBusinessHours,
     ServiceNotFound,
+    SlotInThePast,
     SlotUnavailable,
 )
 from app.calendar.hours import OpeningPeriod
@@ -32,5 +33,6 @@ __all__ = [
     "OutsideBusinessHours",
     "ServiceNotFound",
     "Slot",
+    "SlotInThePast",
     "SlotUnavailable",
 ]

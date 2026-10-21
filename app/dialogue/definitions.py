@@ -21,6 +21,7 @@ from app.tools import TOOLS
 # from one call to the next.
 TOOL_ORDER = (
     "check_availability",
+    "find_appointments",
     "book_appointment",
     "reschedule",
     "cancel",
@@ -42,8 +43,8 @@ _PHONE = {
 _APPOINTMENT_ID = {
     "type": "string",
     "description": (
-        "The appointment identifier returned by an earlier book_appointment "
-        "result in this conversation."
+        "The appointment identifier returned by find_appointments or by a "
+        "book_appointment result in this conversation. Never a guess."
     ),
 }
 
@@ -59,6 +60,20 @@ _TOOLS: dict[str, tuple[str, dict[str, Any]]] = {
                 "type": "string",
                 "description": "The day to look at, as an ISO date: 2026-03-02.",
             },
+        },
+    ),
+    "find_appointments": (
+        "Look up the upcoming appointments a caller already has, by their name "
+        "and telephone number. Both must match. Call this before you reschedule "
+        "or cancel anything: it is the only way to get an appointment "
+        "identifier for a booking made on an earlier call. An empty list means "
+        "nothing upcoming is booked under that name and number.",
+        {
+            "customer_name": {
+                "type": "string",
+                "description": "The caller's full name, as they gave it.",
+            },
+            "phone": _PHONE,
         },
     ),
     "book_appointment": (
@@ -103,9 +118,9 @@ _TOOLS: dict[str, tuple[str, dict[str, Any]]] = {
         {"appointment_id": _APPOINTMENT_ID},
     ),
     "take_message": (
-        "Record a message for a human to deal with later. Use this when the "
-        "caller wants something the calendar cannot do and does not want to be "
-        "put through. All three details are required.",
+        "Record a message for the team to deal with later; they will call the "
+        "caller back. Use this when the caller wants something the calendar "
+        "cannot do. All three details are required.",
         {
             "caller_name": {
                 "type": "string",
@@ -119,9 +134,11 @@ _TOOLS: dict[str, tuple[str, dict[str, Any]]] = {
         },
     ),
     "transfer_to_human": (
-        "Hand the call to a person. Use this when the caller asks for someone, "
-        "asks for medical or legal advice, is complaining or wants a refund, or "
-        "has asked the same thing twice without getting anywhere.",
+        "Ask the team to call this caller back about something a person has to "
+        "handle. There is no live transfer: the call is not connected to "
+        "anyone. Use this when the caller asks for someone, asks for medical or "
+        "legal advice, is complaining or wants a refund, or has asked the same "
+        "thing twice without getting anywhere.",
         {
             "reason": {
                 "type": "string",
@@ -180,7 +197,7 @@ def tool_definitions() -> list[ToolDefinition]:
                     "type": "object",
                     "properties": properties,
                     # Strict tool use requires both: every property listed as
-                    # required, and nothing else accepted. None of the six
+                    # required, and nothing else accepted. None of the
                     # tools has an optional argument, so nothing is lost.
                     "required": list(properties),
                     "additionalProperties": False,

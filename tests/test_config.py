@@ -209,8 +209,9 @@ def test_the_dialogue_settings_have_safe_defaults() -> None:
     settings = Settings(_env_file=None)
 
     assert settings.anthropic_api_key == ""
-    assert settings.dialogue_model == "claude-opus-5"
-    assert settings.dialogue_effort == "low"
+    assert settings.dialogue_model == "claude-haiku-4-5"
+    assert settings.dialogue_effort == ""
+    assert settings.dialogue_thinking is False
     assert settings.max_tool_iterations == 8
     assert settings.dialogue_max_tokens == 1024
 

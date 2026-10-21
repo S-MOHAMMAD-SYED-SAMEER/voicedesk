@@ -1,15 +1,15 @@
 """`transfer_to_human` — know when to stop.
 
-The specification cares about "escalation precision and recall", so what
-matters here is that the decision to escalate is recorded, with the reason
-that prompted it, in a form the evaluation harness can count.
+The specification cares about "escalation precision and recall", so what matters is that the decision to escalate is
+recorded, with the reason that prompted it, in a form the evaluation harness can count.
 
-Connecting the call is telephony's job and belongs to the Twilio milestone.
-This tool states the intent; nothing in milestones 3 to 5 can move audio, and
-pretending otherwise would make an escalation look handled when the caller is
-still sitting there.
+**There is no live transfer.** Nothing in this application can connect a caller to a person, and a receptionist that
+said it was putting someone through would be lying. So this tool stores a *request that the team call the caller back*
+(`app/models/staff_request.py`, shown in the staff view) and tells the model, in the result, what it may truthfully say.
+The caller's number is whatever the carrier reported for the call; the model is never asked to guess one.
 """
 
+from app.models import Call, StaffRequest, StaffRequestKind
 from app.tools.base import (
     ToolArgumentError,
     ToolContext,
@@ -19,7 +19,7 @@ from app.tools.base import (
 
 
 def transfer_to_human(context: ToolContext, *, reason: str) -> ToolResult:
-    """Escalate to a human, recording why.
+    """Ask the team to call the caller back, recording why.
 
     The reason is required. An escalation without one cannot be judged right
     or wrong afterwards, which is exactly what the metric needs to do.
@@ -29,8 +29,29 @@ def transfer_to_human(context: ToolContext, *, reason: str) -> ToolResult:
     except ToolArgumentError as exc:
         return ToolResult.failed(str(exc))
 
+    phone = None
+    if context.call_id is not None:
+        call = context.session.get(Call, context.call_id)
+        phone = call.from_number if call is not None else None
+
+    request = StaffRequest(
+        call_id=context.call_id,
+        kind=StaffRequestKind.TRANSFER,
+        phone=phone,
+        body=why,
+    )
+    context.session.add(request)
+    context.session.commit()
     return ToolResult.ok(
         escalated=True,
+        recorded=True,
+        live_transfer_available=False,
         reason=why,
         call_id=str(context.call_id) if context.call_id else None,
+        staff_request_id=str(request.id),
+        what_to_tell_the_caller=(
+            "A person cannot take this call. Say that you have passed it to the "
+            "team and that they will call back. Never say you are transferring "
+            "or putting the caller through."
+        ),
     )

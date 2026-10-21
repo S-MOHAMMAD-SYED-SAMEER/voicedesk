@@ -16,6 +16,7 @@ EXPECTED_TABLES = {
     "services",
     "business_hours",
     "call_costs",
+    "staff_requests",
 }
 
 
@@ -66,6 +67,17 @@ def test_the_models_and_the_migration_agree(migrated_engine: Engine) -> None:
     assert set(Base.metadata.tables) == EXPECTED_TABLES
 
 
+def test_the_models_and_the_migrations_have_no_drift(migrated_engine: Engine) -> None:
+    """What `alembic revision --autogenerate` would write for the models, against the migrated schema: nothing."""
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    with migrated_engine.connect() as connection:
+        differences = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+
+    assert differences == []
+
+
 def test_the_test_database_is_not_the_development_one(session: Session) -> None:
     database = session.execute(text("select current_database()")).scalar_one()
 
@@ -75,11 +87,11 @@ def test_the_test_database_is_not_the_development_one(session: Session) -> None:
 
 # --- the milestone-8 migration --------------------------------------------
 
-MIGRATIONS = 3
+MIGRATIONS = 4
 
 
-def test_there_are_exactly_three_migrations() -> None:
-    """One per schema change so far, and no more than one for milestone 8."""
+def test_there_are_exactly_four_migrations() -> None:
+    """One per schema change so far: the fourth added the staff requests."""
     import pathlib
 
     versions = pathlib.Path(__file__).resolve().parent.parent / "alembic" / "versions"

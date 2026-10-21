@@ -24,6 +24,7 @@ from .conftest import (
     FakeModel,
     FakeSTT,
     FakeTTS,
+    SlowModel,
     media_text_frame,
     mulaw_frame,
     say,
@@ -242,6 +243,32 @@ def test_speech_then_silence_produces_one_turn(
         "When do you close?",
         "We're open until five.",
     ]
+
+
+def test_a_slow_model_gets_a_holding_line_down_the_phone_before_the_reply(
+    session: Session, telephony, twilio_call, open_weekdays, haircut
+) -> None:
+    tts = FakeTTS()
+    client, _ = telephony(
+        model=SlowModel(say("We're open until five."), seconds=0.5),
+        tts=tts,
+        stt=FakeSTT("When do you close?"),
+        holding_line_after_seconds=0.1,
+    )
+
+    with client.websocket_connect(STREAM) as socket:
+        socket.send_text(start_frame())
+        _drain_audio(socket)
+        _speak(socket)
+        _fall_silent(socket)
+        holding, first_mark = _drain_audio(socket)
+        reply, second_mark = _drain_audio(socket)
+
+    assert holding and reply
+    assert first_mark["event"] == second_mark["event"] == "mark"
+    assert tts.calls[1:] == ["One moment, let me check.", "We're open until five."]
+    texts = [turn.text for turn in session.execute(select(Turn)).scalars()]
+    assert "One moment, let me check." not in texts
 
 
 def test_the_reply_goes_out_as_carrier_sized_frames(

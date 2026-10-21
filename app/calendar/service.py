@@ -25,7 +25,7 @@ import psycopg
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.calendar import availability, hours
+from app.calendar import availability, hours, lookup
 from app.calendar.availability import Slot
 from app.calendar.errors import (
     AppointmentAlreadyCancelled,
@@ -35,8 +35,10 @@ from app.calendar.errors import (
     InvalidServiceDuration,
     OutsideBusinessHours,
     ServiceNotFound,
+    SlotInThePast,
     SlotUnavailable,
 )
+from app.clock import Clock, default_clock
 from app.config import Settings, get_settings
 from app.models import Appointment, AppointmentStatus, Service
 
@@ -44,8 +46,14 @@ from app.models import Appointment, AppointmentStatus, Service
 class CalendarService:
     """Calendar operations against one session and one configuration."""
 
-    def __init__(self, session: Session, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        settings: Settings | None = None,
+        clock: Clock | None = None,
+    ) -> None:
         self._session = session
+        self._clock = clock or default_clock()
         self._settings = settings or get_settings()
         self._timezone = ZoneInfo(self._settings.business_timezone)
         self._granularity = timedelta(
@@ -59,9 +67,14 @@ class CalendarService:
         return self._timezone
 
     def available_slots(self, service_id: uuid.UUID, day: date) -> list[Slot]:
-        """Bookable start times for a service on one local day, earliest first."""
+        """Bookable start times for a service on one local day, earliest first.
+
+        A start time that has already passed is never offered, so asking about
+        today returns only what is still ahead and asking about a day gone by
+        returns nothing.
+        """
         service = self._bookable_service(service_id)
-        return availability.free_slots(
+        slots = availability.free_slots(
             self._session,
             staff_id=service.staff_id,
             day=day,
@@ -69,6 +82,8 @@ class CalendarService:
             granularity=self._granularity,
             timezone=self._timezone,
         )
+        now = self._clock()
+        return [slot for slot in slots if slot.starts_at > now]
 
     def is_available(self, service_id: uuid.UUID, starts_at: datetime) -> bool:
         """Could this service start then?
@@ -79,6 +94,8 @@ class CalendarService:
         service = self._bookable_service(service_id)
         ends_at = self._interval(service, starts_at)[1]
 
+        if starts_at <= self._clock():
+            return False
         if not hours.fits_in_one_period(
             self._session, starts_at, ends_at, self._timezone
         ):
@@ -88,6 +105,17 @@ class CalendarService:
             staff_id=service.staff_id,
             starts_at=starts_at,
             ends_at=ends_at,
+        )
+
+    def find_upcoming(
+        self, *, customer_name: str, phone: str
+    ) -> list[Appointment]:
+        """A caller's booked appointments still ahead of us, matched by name **and** number."""
+        return lookup.upcoming_for(
+            self._session,
+            customer_name=customer_name,
+            phone=phone,
+            after=self._clock(),
         )
 
     # --- writing -----------------------------------------------------------
@@ -109,6 +137,7 @@ class CalendarService:
         """
         service = self._bookable_service(service_id)
         starts_at, ends_at = self._interval(service, starts_at)
+        self._require_future(starts_at)
         self._require_open(starts_at, ends_at)
 
         appointment = Appointment(
@@ -144,6 +173,7 @@ class CalendarService:
 
         service = self._bookable_service(appointment.service_id)
         new_starts_at, new_ends_at = self._interval(service, new_starts_at)
+        self._require_future(new_starts_at)
         self._require_open(new_starts_at, new_ends_at)
 
         appointment.starts_at = new_starts_at
@@ -202,6 +232,13 @@ class CalendarService:
                 "own does not name an instant."
             )
         return starts_at, starts_at + self._duration(service)
+
+    def _require_future(self, starts_at: datetime) -> None:
+        if starts_at <= self._clock():
+            raise SlotInThePast(
+                f"{starts_at.astimezone(self._timezone).isoformat()} has already "
+                "passed, so nothing can be booked or moved to it."
+            )
 
     def _require_open(self, starts_at: datetime, ends_at: datetime) -> None:
         if not hours.fits_in_one_period(

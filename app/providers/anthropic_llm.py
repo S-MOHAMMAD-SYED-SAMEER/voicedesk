@@ -53,12 +53,16 @@ class AnthropicLanguageModel:
         model: str | None = None,
         max_tokens: int | None = None,
         effort: str | None = None,
+        thinking: bool | None = None,
         settings: Settings | None = None,
     ) -> None:
         resolved = settings or get_settings()
         self._model = model or resolved.dialogue_model
         self._max_tokens = max_tokens or resolved.dialogue_max_tokens
-        self._effort = effort or resolved.dialogue_effort
+        self._effort = effort if effort is not None else resolved.dialogue_effort
+        self._thinking = (
+            resolved.dialogue_thinking if thinking is None else thinking
+        )
         # An explicit timeout, because the SDK's default is minutes and a
         # caller is on the telephone. It ends the *wait*: the request is
         # abandoned, and if it was running on a worker thread that thread
@@ -66,6 +70,7 @@ class AnthropicLanguageModel:
         self._client = client or anthropic.Anthropic(
             api_key=resolved.anthropic_api_key or None,
             timeout=resolved.dialogue_timeout_seconds,
+            max_retries=resolved.dialogue_max_retries,
         )
 
     @property
@@ -96,12 +101,14 @@ class AnthropicLanguageModel:
                 }
                 for tool in tools
             ],
-            # Adaptive thinking rather than a fixed token budget: the budgeted
-            # form is removed on current models. Depth is controlled by effort,
-            # which defaults low — a receptionist is on a latency budget.
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": self._effort},
         }
+        # Off unless configured: a receptionist is on a latency budget, and not every model
+        # accepts these parameters. Adaptive thinking rather than a fixed token budget (the
+        # budgeted form is removed on current models); depth is controlled by effort.
+        if self._thinking:
+            request["thinking"] = {"type": "adaptive"}
+        if self._effort:
+            request["output_config"] = {"effort": self._effort}
 
         started = time.perf_counter()
         try:

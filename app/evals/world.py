@@ -18,8 +18,10 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.calendar import CalendarError, CalendarService
+from app.clock import fixed_clock
 from app.config import Settings
 from app.evals.scenario import (
+    EVAL_NOW,
     Scenario,
     ScenarioError,
     World,
@@ -162,7 +164,7 @@ def _appointments(
     if not world.appointments:
         return {}
 
-    calendar = CalendarService(session, settings)
+    calendar = CalendarService(session, settings, clock=fixed_clock(EVAL_NOW))
     built: dict[str, uuid.UUID] = {}
 
     for seed in world.appointments:

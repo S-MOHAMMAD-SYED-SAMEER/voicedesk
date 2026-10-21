@@ -21,13 +21,19 @@ from app.dialogue.conversation import (
 )
 from app.dialogue.definitions import tool_definitions
 from app.dialogue.errors import DialogueError, ToolLoopExhausted
-from app.dialogue.executor import UNVERIFIED_SLOT, ToolCallRecord, ToolExecutor
+from app.dialogue.executor import (
+    UNKNOWN_APPOINTMENT,
+    UNVERIFIED_SLOT,
+    ToolCallRecord,
+    ToolExecutor,
+)
 from app.dialogue.prompt import SYSTEM_PROMPT_VERSION, build_system_prompt
 
 __all__ = [
     "LOOP_EXHAUSTED_REPLY",
     "MODEL_FAILURE_REPLY",
     "SYSTEM_PROMPT_VERSION",
+    "UNKNOWN_APPOINTMENT",
     "UNVERIFIED_SLOT",
     "Conversation",
     "DialogueError",

@@ -10,10 +10,10 @@ from app.providers.llm import ToolDefinition
 from app.tools import TOOLS
 
 
-def test_exactly_the_six_registered_tools_are_described() -> None:
+def test_exactly_the_seven_registered_tools_are_described() -> None:
     definitions = tool_definitions()
 
-    assert len(definitions) == 6
+    assert len(definitions) == 7
     assert {definition.name for definition in definitions} == set(TOOLS)
 
 

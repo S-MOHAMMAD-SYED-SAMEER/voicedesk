@@ -30,6 +30,7 @@ import anyio
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session
 
+from app.clock import fixed_clock
 from app.config import Settings, get_settings
 from app.cost import record_turn_cost
 from app.dialogue import Conversation
@@ -38,6 +39,7 @@ from app.evals import realtime as rt
 from app.evals import world as worlds
 from app.evals.model import ScriptedModel, ScriptExhausted
 from app.evals.scenario import (
+    EVAL_NOW,
     EVAL_TIMEZONE,
     AppointmentSpec,
     Scenario,
@@ -140,7 +142,9 @@ class EvalRunner:
 
     def _text(self, session: Session, scenario: Scenario, trace: CallTrace) -> None:
         model, call, appointments = self._prepare(session, scenario, trace)
-        conversation = Conversation(session, call, model, self._settings)
+        conversation = Conversation(
+            session, call, model, self._settings, clock=fixed_clock(EVAL_NOW)
+        )
 
         for index, beat in enumerate(scenario.script):
             result = conversation.send(beat.caller)
@@ -153,7 +157,9 @@ class EvalRunner:
 
     def _realtime(self, session: Session, scenario: Scenario, trace: CallTrace) -> None:
         model, call, appointments = self._prepare(session, scenario, trace)
-        conversation = Conversation(session, call, model, self._settings)
+        conversation = Conversation(
+            session, call, model, self._settings, clock=fixed_clock(EVAL_NOW)
+        )
         tts = rt.PacedTextToSpeech()
         sink = NullSink()
 

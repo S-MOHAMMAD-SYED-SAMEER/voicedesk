@@ -40,6 +40,7 @@ EVAL_SUFFIX = "_evals"
 # forgotten here would otherwise fail loudly rather than silently leak rows.
 EVAL_TABLES = (
     "call_costs",
+    "staff_requests",
     "tool_calls",
     "turns",
     "appointments",

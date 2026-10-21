@@ -25,27 +25,44 @@ table is the readable transcript, not a replay log. Milestone 5 will hold a
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from app.clock import Clock, default_clock
 from app.config import Settings, get_settings
 from app.dialogue.definitions import tool_definitions
 from app.dialogue.errors import ToolLoopExhausted
 from app.dialogue.executor import ToolCallRecord, ToolExecutor
-from app.dialogue.prompt import SYSTEM_PROMPT_VERSION, build_system_prompt
-from app.models import Call, ToolCall, Turn, TurnRole
+from app.dialogue.prompt import (
+    SYSTEM_PROMPT_VERSION,
+    build_system_prompt,
+    clock_context,
+)
+from app.models import (
+    Call,
+    StaffRequest,
+    StaffRequestKind,
+    ToolCall,
+    Turn,
+    TurnRole,
+)
 from app.providers.llm import LanguageModel, Message, ModelError, ModelResponse
 from app.tools import ToolContext
 
 # Said when the system cannot answer. Fixed strings, because a model that has
 # just failed is not the thing to ask for an apology.
+#
+# Neither promises a person on the line, because there is none: each is said only
+# together with a staff request (`_record_failure`) asking the team to call back,
+# so what the caller is told is true.
 MODEL_FAILURE_REPLY = (
     "I'm sorry, I'm having trouble with our system just now. "
-    "Let me pass you to a colleague."
+    "I've noted your call and the team will call you back."
 )
 LOOP_EXHAUSTED_REPLY = (
     "I'm sorry, I'm not getting anywhere with that. "
-    "Let me pass you to a colleague who can help."
+    "I've noted your call and the team will call you back."
 )
 
 
@@ -114,9 +131,12 @@ class Conversation:
         call: Call,
         model: LanguageModel,
         settings: Settings | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._session = session
         self._settings = settings or get_settings()
+        self._clock = clock or default_clock()
+        self._timezone = ZoneInfo(self._settings.business_timezone)
         self._model = model
         self._call_id = call.id
         self._history: list[Message] = []
@@ -126,7 +146,10 @@ class Conversation:
         self._system = build_system_prompt(session)
         self._executor = ToolExecutor(
             ToolContext(
-                session=session, settings=self._settings, call_id=self._call_id
+                session=session,
+                settings=self._settings,
+                call_id=self._call_id,
+                clock=self._clock,
             )
         )
 
@@ -150,14 +173,20 @@ class Conversation:
         tokens = TokenTotals()
         failed = False
 
+        system = self._system_now()
+        reason = ""
         try:
-            reply = self._run(records, latencies, tokens)
-        except ModelError:
+            reply = self._run(system, records, latencies, tokens)
+        except ModelError as exc:
             reply, failed = MODEL_FAILURE_REPLY, True
+            reason = f"the model could not answer ({type(exc).__name__})"
         except ToolLoopExhausted:
             reply, failed = LOOP_EXHAUSTED_REPLY, True
+            reason = "the conversation went round the tool loop without finishing"
 
         latency_ms = sum(latencies)
+        if failed:
+            self._record_failure(reason)
         caller_turn_id, agent_turn_id = self._persist(
             caller_text, spoken_at, reply, latency_ms, records
         )
@@ -175,8 +204,29 @@ class Conversation:
             output_tokens=tokens.output_tokens,
         )
 
+    def _system_now(self) -> str:
+        """The constant prompt, then what time it is. Read once per caller turn."""
+        return f"{self._system}\n{clock_context(self._clock(), self._timezone)}\n"
+
+    def _record_failure(self, reason: str) -> None:
+        """Back the failure reply with a request that the team call the caller back.
+
+        The caller is told the team will call back, so there must be a row that says
+        so. The number is the one the carrier reported for the call; no name is known.
+        """
+        call = self._session.get(Call, self._call_id)
+        self._session.add(
+            StaffRequest(
+                call_id=self._call_id,
+                kind=StaffRequestKind.FAILURE,
+                phone=call.from_number if call is not None else None,
+                body=f"The system could not answer: {reason}.",
+            )
+        )
+
     def _run(
         self,
+        system: str,
         records: list[ToolCallRecord],
         latencies: list[int],
         tokens: TokenTotals,
@@ -191,7 +241,7 @@ class Conversation:
         """
         for _ in range(self._settings.max_tool_iterations):
             response = self._model.respond(
-                system=self._system,
+                system=system,
                 messages=self._history,
                 tools=self._tools,
             )
