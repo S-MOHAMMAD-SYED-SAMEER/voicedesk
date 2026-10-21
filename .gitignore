@@ -21,3 +21,4 @@ dist/
 
 # OS metadata
 .DS_Store
+var/

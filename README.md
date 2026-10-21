@@ -1638,6 +1638,16 @@ What is still true after these changes: **no real service has been called**, the
 and says nothing about Claude, and the speech in the browser harness is simulated locally (a fixed transcript and a
 tone) with no real phone line.
 
+### The real-model evaluation (planned; **not run yet**)
+
+`python -m realeval` runs 16 scenarios (scripted caller lines, outcome-based expectations, a synthetic salon) against a
+model with a hard cap on requests and dollars, kept in a ledger on disk. With no `--provider` it runs an offline stub that
+does nothing, to prove the machinery; `--provider anthropic` refuses to start without both caps, both prices (VoiceDesk
+ships none), retries off, a key (only the *names* are checked) and scenarios that match the digest frozen in
+[docs/EVAL.md](docs/EVAL.md). The first 401, 403, 429, 503, 529, timeout, quota or credit error stops it: nothing is
+retried and nothing resumes without a person. The plan, the scoring rules, their known limits and the decision rule are in
+`docs/EVAL.md`. **No real request has been made, and no result is published.**
+
 ### Deliberately not built yet
 
 No outbound calling, SMS, email or actual transfer. **No billing:** there is no Stripe, no invoice, no subscription,

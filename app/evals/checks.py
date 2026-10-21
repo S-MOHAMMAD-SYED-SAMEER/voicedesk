@@ -237,6 +237,8 @@ def _tools(
         _resolved(expected, trace) for expected in expect.expected_tools
     )
     for record in unmatched:
+        if record.tool_name in expect.tolerated_tools:
+            continue
         tally_category = _classify(
             record, expect, expected_names, matched, resolved
         )
