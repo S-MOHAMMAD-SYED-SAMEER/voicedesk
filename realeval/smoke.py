@@ -43,10 +43,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(["--provider", "anthropic", *(argv or sys.argv[1:])])
     try:
         model, budget, settings = _model(arguments)
-        if budget.requests_used:
+        # One smoke request, with one second attempt allowed only if the first got no answer.
+        if budget.requests_used > 1 or budget.requests_used > budget.unknown_requests:
             raise CannotRun(
-                f"the ledger already holds {budget.requests_used} request(s): the smoke request is the first one, "
-                "and there is only one"
+                f"the ledger already holds {budget.requests_used} request(s) "
+                f"({budget.requests_used - budget.unknown_requests} answered): the smoke is one request, "
+                "plus one second attempt only if the first got no answer"
             )
     except CannotRun as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -75,7 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"tokens          : {response.input_tokens} in, {response.output_tokens} out")
     print(f"latency         : {response.latency_ms} ms")
     print(f"cost            : USD {cost}")
-    print(f"ledger          : {budget.requests_used} of {budget.request_cap} requests, {budget.describe_spend()} of USD {budget.cost_cap_usd}")
+    print(f"ledger          : {budget.requests_used} of {budget.request_cap} requests, {budget.describe_spend()} (cap USD {budget.cost_cap_usd})")
     return 0
 
 

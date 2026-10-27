@@ -36,3 +36,9 @@ The 15 s timeout lives in `app/config.py` (`dialogue_timeout_seconds`), not in `
 `--timeout-seconds` (default 60); the application keeps 15 s. `max_retries` stays 0. Each request's latency is recorded in the
 ledger and reported (p50, p95) separately; the receptionist is not graded on it. Real phone use needs a much faster reply,
 which this test does not measure.
+
+### One smoke request, with one second attempt only because the first got no answer
+
+`python -m realeval.smoke` sends exactly one request. It refuses if the ledger already holds an answered request, or two
+requests of any kind. After the first attempt timed out, Sameer approved exactly one more (2026-10-27); a timeout or any
+401, 403, 429, 503, 529, quota or credit error on it stops everything, and the full run is not started either way.

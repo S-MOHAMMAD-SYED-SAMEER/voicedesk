@@ -69,15 +69,35 @@ def test_the_tools_the_model_asks_for_are_not_run(monkeypatch: pytest.MonkeyPatc
     assert fake.call_count == 1
 
 
-def test_a_second_smoke_is_refused_before_anything_is_sent(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> None:
+def test_a_second_attempt_is_allowed_once_when_the_first_got_no_answer(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    fake = FakeModel(say("answered"))
+    budget = _patched(monkeypatch, tmp_path, fake, used=1)
+
+    code = smoke.main(ARGS)
+
+    assert code == 0 and fake.call_count == 1 and budget.requests_used == 2
+
+
+def test_a_third_smoke_is_refused_before_anything_is_sent(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> None:
     fake = FakeModel(say("never sent"))
-    _patched(monkeypatch, tmp_path, fake, used=1)
+    _patched(monkeypatch, tmp_path, fake, used=2)
 
     code = smoke.main(ARGS)
 
     assert code == cli.CANNOT_RUN
     assert fake.call_count == 0
-    assert "only one" in capsys.readouterr().err
+    assert "one second attempt" in capsys.readouterr().err
+
+
+def test_no_smoke_after_an_answered_one(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    fake = FakeModel(say("never sent"))
+    budget = _patched(monkeypatch, tmp_path, fake)
+    budget.reserve("answered", Decimal("0.001"))
+    budget.record(0, Decimal("0.001"), (10, 5), "m", latency_ms=100)
+
+    code = smoke.main(ARGS)
+
+    assert code == cli.CANNOT_RUN and fake.call_count == 0
 
 
 def test_a_failed_request_is_reported_and_not_retried(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> None:

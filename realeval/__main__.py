@@ -149,7 +149,7 @@ def _model(arguments: argparse.Namespace):
     print(
         f"REAL RUN: {settings.dialogue_model}, timeout {settings.dialogue_timeout_seconds:g}s, retries "
         f"{settings.dialogue_max_retries}. Ledger {arguments.ledger}: {budget.requests_used} of {budget.request_cap} "
-        f"requests and {budget.describe_spend()} of USD {budget.cost_cap_usd} used.",
+        f"requests and {budget.describe_spend()} (cap USD {budget.cost_cap_usd}).",
         flush=True,
     )
     return BudgetedModel(build_model(settings), budget), budget, settings
