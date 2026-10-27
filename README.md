@@ -487,7 +487,7 @@ harness. Neither is speech recognition and neither is speech.
 `elevenlabs_tts.py` are plain REST over `httpx` — no vendor SDK, and each is
 the only module in the project that knows its vendor's endpoint or header
 names, which a test asserts. Their request shapes are verified against a mock
-transport; **no request has ever left this repository**, so no accuracy,
+transport; **no request to either service has ever left this repository**, so no accuracy,
 latency or cost claim is made about either service. Set a key and switch the
 provider setting to use them.
 
@@ -867,7 +867,8 @@ python -m app.metrics           # or --call <id> for one call
 ```
 
 **The table below is a scripted sample, not a measurement.** It shows the shape of the output with invented
-numbers; no real turn has ever been timed, because no real provider has ever been called.
+numbers; no real *call* has ever been timed (speech and telephony have never been called). The only real
+model requests are the typed-text ones of the real-model evaluation below, whose latency is reported apart.
 
 ```
 metric                         count       p50       p95
@@ -896,7 +897,8 @@ lifecycle.
 
 **They do not place a telephone call and they do not call any external
 service.** There is no Anthropic, Deepgram, ElevenLabs or Twilio credential in
-this development environment, and none has ever been used. Nothing here
+this development environment, and no Deepgram, ElevenLabs or Twilio one has ever been used (an Anthropic key was
+used once, for the typed-text real-model evaluation below). Nothing here
 establishes real carrier behaviour, real latency, real transcription accuracy,
 real voice quality or production readiness, and no such claim is made anywhere
 in this repository.
@@ -997,9 +999,9 @@ cost. **They are not a bill, and they will not match one.** Specifically:
 
 The specification asks for "cost per call and cost per completed booking" in
 this README as the sales argument. **No such figure is given here, because
-none has been earned:** no external service has ever been called from this
-code, so there is no usage from a real call to price, and no price to apply to
-it. The machinery to produce that number exists and is tested; the number
+none has been earned:** no speech or telephony service has ever been called from this
+code, so there is no usage from a real call to price (the real-model evaluation priced typed text
+only, at USD 1 and 5 per million tokens, and says so). The machinery to produce that number exists and is tested; the number
 does not.
 
 ### Counting characters once
@@ -1638,7 +1640,7 @@ What is still true after these changes: **no real service has been called**, the
 and says nothing about Claude, and the speech in the browser harness is simulated locally (a fixed transcript and a
 tone) with no real phone line.
 
-### The real-model evaluation (planned; **not run yet**)
+### The real-model evaluation (run once, 2026-10-27)
 
 `python -m realeval` runs 17 scenarios (29 caller turns; five of them safety-only; scripted caller lines, outcome-based expectations, a synthetic salon) against a
 model with a hard cap on requests and dollars, kept in a ledger on disk. With no `--provider` it runs an offline stub that
@@ -1646,7 +1648,9 @@ does nothing, to prove the machinery; `--provider anthropic` refuses to start wi
 ships none), retries off, a key (only the *names* are checked) and scenarios that match the digest frozen in
 [docs/EVAL.md](docs/EVAL.md). The first 401, 403, 429, 503, 529, timeout, quota or credit error stops it: nothing is
 retried and nothing resumes without a person. The plan, the scoring rules, their known limits and the decision rule are in
-`docs/EVAL.md`. **No real request has been made, and no result is published.**
+`docs/EVAL.md`. **It was run once on `claude-haiku-4-5`: 10 of 12 task scenarios and 5 of 5 safety-only scenarios
+passed (a receptionist that does nothing passes all five safety-only ones). One run, scripted callers, fictional salon
+data, typed text: not an accuracy figure. The two failures are in the results; see `docs/results/`.**
 
 ### Deliberately not built yet
 
@@ -1654,13 +1658,13 @@ No outbound calling, SMS, email or actual transfer. **No billing:** there is no 
 no quota, no customer account and no payment processing, and none is coming.
 Milestone 8 is accounting — writing down what was used — and nothing else.
 
-**No external service has ever been called from this code, and no telephone
-call has ever been placed.** Every test injects a scripted model and scripted
+**No speech or telephony service has ever been called from this code, and no telephone
+call has ever been placed.** The only real requests are 54 typed-text requests to Anthropic
+(2 smoke, 52 in the one real-model run below). Every test injects a scripted model and scripted
 speech providers, and the telephony tests simulate the carrier over a real
-socket. The Anthropic, Deepgram, ElevenLabs and Twilio request shapes are
+socket. The Deepgram, ElevenLabs and Twilio request shapes are
 verified; none of their behaviour is. No accuracy, latency, quality or cost
-number is claimed for any of them; that starts with the milestone-9 scenario
-evals.
+number is claimed for them.
 
 `transfer_to_human` records a request that the team call the caller back, with the reason, and the staff view shows it.
 Actually connecting the caller to a person is not implemented, and the receptionist is told never to say it is.

@@ -1,0 +1,714 @@
+{
+  "entries": [
+    {
+      "at": "2026-10-27T07:16:46.936608+00:00",
+      "label": "real-eval",
+      "cost_usd": null,
+      "tokens": null,
+      "max_cost_usd": "0.007981",
+      "outcome": "ModelUnavailable (timed out at the 15 s limit; no answer, no token count)",
+      "cost_note": "unknown, at most max_cost_usd (a request that got no answer may still be billed); amended 2026-10-27 on Sameer's decision B",
+      "latency_ms": null,
+      "estimate": {
+        "input_tokens_estimated": 2861,
+        "max_tokens": 1024,
+        "chars_per_token": 3
+      }
+    },
+    {
+      "at": "2026-10-27T07:40:38.092858+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003058",
+      "max_cost_usd": "0.007981",
+      "tokens": {
+        "input": 2658,
+        "output": 80
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3268,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:07:45.942975+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003128",
+      "max_cost_usd": "0.007981",
+      "tokens": {
+        "input": 2658,
+        "output": 94
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3384,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:07:49.357798+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004528",
+      "max_cost_usd": "0.009116",
+      "tokens": {
+        "input": 4263,
+        "output": 53
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2939,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:07:52.330949+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.00501",
+      "max_cost_usd": "0.009211",
+      "tokens": {
+        "input": 4330,
+        "output": 136
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3324,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:07:55.671914+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.00475",
+      "max_cost_usd": "0.009446",
+      "tokens": {
+        "input": 4605,
+        "output": 29
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2438,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:07:58.199140+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003118",
+      "max_cost_usd": "0.007976",
+      "tokens": {
+        "input": 2653,
+        "output": 93
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2807,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:01.018728+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004592",
+      "max_cost_usd": "0.009111",
+      "tokens": {
+        "input": 4257,
+        "output": 67
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3125,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:04.167267+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.005018",
+      "max_cost_usd": "0.009214",
+      "tokens": {
+        "input": 4333,
+        "output": 137
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3059,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:07.240754+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004797",
+      "max_cost_usd": "0.009448",
+      "tokens": {
+        "input": 4607,
+        "output": 38
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2393,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:09.747211+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.00283",
+      "max_cost_usd": "0.007971",
+      "tokens": {
+        "input": 2650,
+        "output": 36
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2599,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:12.367489+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003198",
+      "max_cost_usd": "0.008081",
+      "tokens": {
+        "input": 2713,
+        "output": 97
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2846,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:15.223002+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004",
+      "max_cost_usd": "0.008821",
+      "tokens": {
+        "input": 3710,
+        "output": 58
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3163,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:18.500138+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003133",
+      "max_cost_usd": "0.007972",
+      "tokens": {
+        "input": 2653,
+        "output": 96
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3038,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:21.547665+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004354",
+      "max_cost_usd": "0.009015",
+      "tokens": {
+        "input": 4119,
+        "output": 47
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 1447,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:23.016068+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.005192",
+      "max_cost_usd": "0.009106",
+      "tokens": {
+        "input": 4182,
+        "output": 202
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 4077,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:27.107326+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004707",
+      "max_cost_usd": "0.009428",
+      "tokens": {
+        "input": 4522,
+        "output": 37
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2517,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:29.715871+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003152",
+      "max_cost_usd": "0.007963",
+      "tokens": {
+        "input": 2637,
+        "output": 103
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2969,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:32.695121+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004446",
+      "max_cost_usd": "0.00911",
+      "tokens": {
+        "input": 4251,
+        "output": 39
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2895,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:35.610561+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004558",
+      "max_cost_usd": "0.009192",
+      "tokens": {
+        "input": 4308,
+        "output": 50
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2846,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:38.475075+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.005047",
+      "max_cost_usd": "0.009277",
+      "tokens": {
+        "input": 4367,
+        "output": 136
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2946,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:41.437104+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004812",
+      "max_cost_usd": "0.009511",
+      "tokens": {
+        "input": 4647,
+        "output": 33
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2346,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:43.866635+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.002854",
+      "max_cost_usd": "0.007973",
+      "tokens": {
+        "input": 2649,
+        "output": 41
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2578,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:46.566881+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003147",
+      "max_cost_usd": "0.007967",
+      "tokens": {
+        "input": 2647,
+        "output": 100
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 1926,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:48.503436+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004573",
+      "max_cost_usd": "0.009103",
+      "tokens": {
+        "input": 4258,
+        "output": 63
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 1835,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:50.361868+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.005131",
+      "max_cost_usd": "0.009213",
+      "tokens": {
+        "input": 4341,
+        "output": 158
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 1633,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:52.009424+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004794",
+      "max_cost_usd": "0.009487",
+      "tokens": {
+        "input": 4639,
+        "output": 31
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 1928,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:08:54.016239+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003194",
+      "max_cost_usd": "0.007972",
+      "tokens": {
+        "input": 2654,
+        "output": 108
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 11315,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:05.342032+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004423",
+      "max_cost_usd": "0.009123",
+      "tokens": {
+        "input": 4273,
+        "output": 30
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 7525,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:12.891028+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004591",
+      "max_cost_usd": "0.009211",
+      "tokens": {
+        "input": 4321,
+        "output": 54
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2842,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:15.827727+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003114",
+      "max_cost_usd": "0.007975",
+      "tokens": {
+        "input": 2654,
+        "output": 92
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2771,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:18.609242+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.00306",
+      "max_cost_usd": "0.008202",
+      "tokens": {
+        "input": 2870,
+        "output": 38
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2515,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:21.146605+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003417",
+      "max_cost_usd": "0.008288",
+      "tokens": {
+        "input": 2927,
+        "output": 98
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2882,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:24.038546+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.005195",
+      "max_cost_usd": "0.009334",
+      "tokens": {
+        "input": 4395,
+        "output": 160
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3959,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:28.012299+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004849",
+      "max_cost_usd": "0.009598",
+      "tokens": {
+        "input": 4679,
+        "output": 34
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 4307,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:32.422894+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003119",
+      "max_cost_usd": "0.007975",
+      "tokens": {
+        "input": 2654,
+        "output": 93
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2766,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:35.195821+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.00305",
+      "max_cost_usd": "0.008202",
+      "tokens": {
+        "input": 2870,
+        "output": 36
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2439,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:37.654995+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003385",
+      "max_cost_usd": "0.008285",
+      "tokens": {
+        "input": 2925,
+        "output": 92
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2860,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:40.526579+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.004551",
+      "max_cost_usd": "0.009235",
+      "tokens": {
+        "input": 4246,
+        "output": 61
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3843,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:44.489670+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003098",
+      "max_cost_usd": "0.00797",
+      "tokens": {
+        "input": 2648,
+        "output": 90
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2782,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:47.281714+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003396",
+      "max_cost_usd": "0.008193",
+      "tokens": {
+        "input": 2861,
+        "output": 107
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2909,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:50.202775+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003172",
+      "max_cost_usd": "0.008417",
+      "tokens": {
+        "input": 3067,
+        "output": 21
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2192,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:52.420658+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003252",
+      "max_cost_usd": "0.00847",
+      "tokens": {
+        "input": 3097,
+        "output": 31
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2340,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:54.859052+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003118",
+      "max_cost_usd": "0.007976",
+      "tokens": {
+        "input": 2653,
+        "output": 93
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2748,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:09:57.616212+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.002936",
+      "max_cost_usd": "0.008145",
+      "tokens": {
+        "input": 2781,
+        "output": 31
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2527,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:00.164748+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003169",
+      "max_cost_usd": "0.008224",
+      "tokens": {
+        "input": 2824,
+        "output": 69
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2876,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:03.121481+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003409",
+      "max_cost_usd": "0.007985",
+      "tokens": {
+        "input": 2659,
+        "output": 150
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 3602,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:06.738415+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003077",
+      "max_cost_usd": "0.008354",
+      "tokens": {
+        "input": 2977,
+        "output": 20
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2448,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:09.319576+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003181",
+      "max_cost_usd": "0.007968",
+      "tokens": {
+        "input": 2641,
+        "output": 108
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 5254,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:14.586665+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003087",
+      "max_cost_usd": "0.008321",
+      "tokens": {
+        "input": 2922,
+        "output": 33
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2484,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:17.153899+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.00316",
+      "max_cost_usd": "0.007981",
+      "tokens": {
+        "input": 2650,
+        "output": 102
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 4654,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:21.818817+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.003148",
+      "max_cost_usd": "0.008346",
+      "tokens": {
+        "input": 2923,
+        "output": 45
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 1600,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:23.523515+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.002932",
+      "max_cost_usd": "0.007955",
+      "tokens": {
+        "input": 2632,
+        "output": 60
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2643,
+      "outcome": "answered"
+    },
+    {
+      "at": "2026-10-27T08:10:26.262094+00:00",
+      "label": "real-eval",
+      "cost_usd": "0.002774",
+      "max_cost_usd": "0.007989",
+      "tokens": {
+        "input": 2649,
+        "output": 25
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "latency_ms": 2482,
+      "outcome": "answered"
+    }
+  ],
+  "request_cap": 200,
+  "cost_cap_usd": "3.00",
+  "prices_usd_per_mtok": {
+    "input": "1",
+    "output": "5"
+  }
+}
