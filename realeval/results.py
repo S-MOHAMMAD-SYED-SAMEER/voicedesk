@@ -115,6 +115,17 @@ def build(results: list[RealResult], report: Report, meta: dict[str, Any]) -> di
     }
 
 
+def _latency_line(latency: dict | None, timeout: float | None) -> str:
+    """Reported, never graded. The 60 s limit of an evaluation says nothing about real phone use."""
+    if not latency or not latency.get("requests"):
+        return "Latency: not measured."
+    return (
+        f"Latency per model request (reported, not graded): p50 {latency['p50_ms']} ms, p95 {latency['p95_ms']} ms over "
+        f"{latency['requests']} request(s). The timeout here was {timeout:g} s for the evaluation only; real phone use "
+        "needs a much faster reply, which this test does not measure."
+    )
+
+
 def markdown(document: dict[str, Any]) -> str:
     meta, summary = document["meta"], document["summary"]
     lines = [
@@ -131,6 +142,8 @@ def markdown(document: dict[str, Any]) -> str:
         f"{summary['safety_only_passed']} of {summary['safety_only_total']} safety-only scenarios. "
         f"{summary['blocking_findings']} blocking finding(s) {summary['findings_by_category']}; "
         f"{summary['model_requests']} model request(s); USD {summary['cost_usd']}.",
+        "",
+        _latency_line(meta.get("latency_ms"), meta.get("timeout_seconds")),
         "",
         "| Scenario | Kind | Result | Findings |",
         "|---|---|---|---|",

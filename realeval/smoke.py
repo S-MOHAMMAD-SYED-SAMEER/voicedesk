@@ -58,7 +58,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ModelError as exc:
         print(
             f"\nFAILED: {type(exc).__name__}: {str(exc)[:300]}\n"
-            f"Ledger: {budget.requests_used} of {budget.request_cap} requests, USD {budget.spent_usd}. "
+            f"Latency: {model.requests[-1].get('latency_ms')} ms (timeout {settings.dialogue_timeout_seconds:g} s).\n"
+            f"Ledger: {budget.requests_used} of {budget.request_cap} requests, {budget.describe_spend()}. "
             "Nothing was retried.",
             file=sys.stderr,
         )
@@ -74,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"tokens          : {response.input_tokens} in, {response.output_tokens} out")
     print(f"latency         : {response.latency_ms} ms")
     print(f"cost            : USD {cost}")
-    print(f"ledger          : {budget.requests_used} of {budget.request_cap} requests, USD {budget.spent_usd} of {budget.cost_cap_usd}")
+    print(f"ledger          : {budget.requests_used} of {budget.request_cap} requests, {budget.describe_spend()} of USD {budget.cost_cap_usd}")
     return 0
 
 

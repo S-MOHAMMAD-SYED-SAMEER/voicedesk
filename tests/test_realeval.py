@@ -14,12 +14,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import create_engine
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.evals.database import resolve_eval_database_url
 from app.evals.runner import EvalRunner
 from app.providers.llm import ModelError, ModelRefused, ModelUnavailable
 from realeval import __main__ as cli
-from realeval import freeze, rules, scenarios
+from realeval import freeze, results, rules, scenarios
 from realeval.budget import BudgetedModel, BudgetRefused, Prices, RunBudget
 from realeval.runner import RealEvalRunner
 from realeval.stub import StubModel
@@ -223,6 +223,119 @@ def test_the_ledger_is_shared_by_everything_that_points_at_it(tmp_path) -> None:
     assert json.loads((tmp_path / "ledger.json").read_text())["request_cap"] == 3
 
 
+def test_a_request_with_no_answer_is_never_counted_as_zero(tmp_path) -> None:
+    budget = _budget(tmp_path, cost=Decimal("3.00"))
+    inner = _Raises(ModelUnavailable("the model timed out"))
+
+    with pytest.raises(ModelUnavailable):
+        BudgetedModel(inner, budget).respond(system="x" * 3_000, messages=[], tools=[])
+
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][0]
+    assert entry["cost_usd"] is None and "unknown" in entry["cost_note"]
+    # 3000 characters is about 1000 tokens in, plus max_tokens 1024 out: USD 0.001 + 0.00512
+    assert Decimal(entry["max_cost_usd"]) == Decimal("0.006120")
+    assert budget.spent_usd == Decimal("0.006120") and budget.unknown_requests == 1
+    assert "unknown cost" in budget.describe_spend() and "0.006120" in budget.describe_spend()
+
+
+def test_the_maximum_of_an_unanswered_request_counts_against_the_cost_cap(tmp_path) -> None:
+    budget = _budget(tmp_path, cap=100, cost=Decimal("0.01"))
+    with pytest.raises(ModelUnavailable):
+        BudgetedModel(_Raises(ModelUnavailable("timed out")), budget).respond(system="x" * 3_000, messages=[], tools=[])
+
+    # 0.006120 is counted; another request of the same size (0.006120) would pass the 0.01 cap and is refused unsent.
+    other = _Raises(ModelUnavailable("never sent"))
+    with pytest.raises(BudgetRefused, match="cap"):
+        BudgetedModel(other, budget).respond(system="x" * 3_000, messages=[], tools=[])
+
+    assert other.sent == 0 and budget.requests_used == 1
+
+
+def test_a_refused_request_is_also_counted_at_its_maximum(tmp_path) -> None:
+    budget = _budget(tmp_path)
+    with pytest.raises(ModelRefused):
+        BudgetedModel(_Raises(ModelRefused("declined")), budget).respond(system="s", messages=[], tools=[])
+
+    assert budget.unknown_requests == 1 and budget.spent_usd > 0
+
+
+def test_the_tools_are_part_of_the_estimate(tmp_path) -> None:
+    from app.dialogue.definitions import tool_definitions
+
+    budget = _budget(tmp_path)
+    model = BudgetedModel(FakeModel(say("a")), budget)
+
+    assert model._projected_cost("s", [], tool_definitions()) > model._projected_cost("s", [], [])
+
+
+def test_latency_is_recorded_for_an_answer_and_for_a_failure(tmp_path) -> None:
+    from app.providers.llm import ModelResponse
+
+    budget = _budget(tmp_path, cap=5)
+    reply = ModelResponse(text="hi", model_name="m", input_tokens=10, output_tokens=5, latency_ms=1234)
+    answered = BudgetedModel(FakeModel(reply), budget)
+    _respond(answered)
+    failing = BudgetedModel(_Raises(ModelUnavailable("timed out")), budget)
+    with pytest.raises(ModelUnavailable):
+        _respond(failing)
+
+    entries = json.loads((tmp_path / "ledger.json").read_text())["entries"]
+    assert entries[0]["latency_ms"] == 1234 and entries[0]["outcome"] == "answered"
+    assert isinstance(entries[1]["latency_ms"], int) and entries[1]["outcome"] == "ModelUnavailable"
+    assert budget.latencies_ms()[0] == 1234
+
+
+def test_latency_percentiles_are_nearest_rank_and_empty_is_none() -> None:
+    from realeval.budget import latency_summary, percentile
+
+    values = list(range(1, 101))
+    assert percentile(values, 0.50) == 50 and percentile(values, 0.95) == 95
+    assert latency_summary([]) == {"requests": 0, "p50_ms": None, "p95_ms": None}
+    assert latency_summary([7]) == {"requests": 1, "p50_ms": 7, "p95_ms": 7}
+
+
+def test_the_results_report_latency_apart_and_say_the_limit_is_for_the_evaluation_only() -> None:
+    line = results._latency_line({"requests": 3, "p50_ms": 800, "p95_ms": 2100}, 60.0)
+
+    assert "p50 800 ms" in line and "p95 2100 ms" in line and "not graded" in line
+    assert "60 s for the evaluation only" in line and "much faster reply" in line
+    assert results._latency_line(None, 60.0) == "Latency: not measured."
+
+
+def test_an_evaluation_run_uses_a_sixty_second_timeout_and_no_retries(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    seen = {}
+    monkeypatch.setattr(cli, "get_settings", lambda: get_settings().model_copy(update={"anthropic_api_key": "sk-test"}))
+    doc = tmp_path / "EVAL.md"
+    doc.write_text(f"real-eval-sha256: `{freeze.digest()}`")
+    monkeypatch.setattr(cli, "EVAL_DOC", doc)
+    import app.providers.factory as factory
+
+    monkeypatch.setattr(factory, "build_model", lambda settings: seen.setdefault("settings", settings) and FakeModel())
+
+    cli._model(_args(ledger=str(tmp_path / "ledger.json"), timeout_seconds=60.0))
+
+    assert seen["settings"].dialogue_timeout_seconds == 60.0 and seen["settings"].dialogue_max_retries == 0
+
+
+def test_the_default_for_an_evaluation_is_sixty_and_the_application_keeps_fifteen() -> None:
+    assert cli.EVAL_TIMEOUT_SECONDS == 60.0
+    assert cli._parser().parse_args([]).timeout_seconds == 60.0
+    assert Settings(_env_file=None).dialogue_timeout_seconds == 15.0
+
+
+def test_a_timeout_outside_a_sane_range_is_refused() -> None:
+    with pytest.raises(cli.CannotRun, match="--timeout-seconds"):
+        cli._model(_args(timeout_seconds=0))
+    with pytest.raises(cli.CannotRun, match="--timeout-seconds"):
+        cli._model(_args(timeout_seconds=600))
+
+
+def test_the_timeout_is_not_in_a_frozen_file() -> None:
+    """The digest covers scenarios.json and rules.py; neither names the timeout."""
+    for path in (freeze.SCENARIOS_JSON, freeze.RULES):
+        assert "timeout" not in path.read_text(encoding="utf-8").lower()
+
+
 # --- starting a run --------------------------------------------------------------
 
 
@@ -236,6 +349,7 @@ def _args(**changes):
         input_usd_per_mtok="1",
         output_usd_per_mtok="5",
         ledger="x.json",
+        timeout_seconds=60.0,
         out=None,
     )
     base.update(changes)
