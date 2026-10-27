@@ -42,3 +42,21 @@ which this test does not measure.
 `python -m realeval.smoke` sends exactly one request. It refuses if the ledger already holds an answered request, or two
 requests of any kind. After the first attempt timed out, Sameer approved exactly one more (2026-10-27); a timeout or any
 401, 403, 429, 503, 529, quota or credit error on it stops everything, and the full run is not started either way.
+
+## 2026-10-27: rules for the full real run, fixed before it starts; approved by Sameer
+
+The full pack is run **once**, with the command in [EVAL.md](EVAL.md) (`claude-haiku-4-5`, retries 0, timeout 60 s, caps
+200 requests and USD 3.00, USD 1 / 5 per million tokens). These rules were written before any scenario was sent:
+
+1. **A timeout on one request.** That scenario is recorded as **"not scored (timeout)"**: neither pass nor fail. The request
+   counts at its maximum cost (never USD 0), nothing more is sent for that scenario, and the run **continues with the next
+   scenario**. It is reported apart from the passes and failures. **A second timeout anywhere in the run stops the run.**
+2. **Any 401, 403, 429, 503, 529, quota or credit error stops the run at once.** Nothing is retried.
+3. **One run only.** Failed scenarios are not re-run. Nothing in `scenarios.json`, the rules, or the prompt changes after
+   results are seen. (A prompt revision is not in scope of this run at all.)
+4. A stopped run is not a result: what happened before the stop is kept under `var/real_eval_partial/` and reported as a stop.
+5. The scenarios and rules must still match `real-eval-sha256`
+   `f39c3f89a2b56265cb65e1fea7e62d987ebcf53794dad8aa289c089b46bc2682`; the runner refuses to send otherwise.
+
+Implemented as `ModelTimeout` (a kind of `ModelUnavailable`), `BudgetedModel` (one tolerated timeout), and `not_scored` on the
+result; tests pin each rule. No scenario, rule or prompt text changed to do so, so the sha256 is the same.

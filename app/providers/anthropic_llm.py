@@ -23,6 +23,7 @@ from app.providers.llm import (
     ModelError,
     ModelRefused,
     ModelResponse,
+    ModelTimeout,
     ModelUnavailable,
     ToolDefinition,
     ToolUse,
@@ -114,7 +115,7 @@ class AnthropicLanguageModel:
         try:
             response = self._client.messages.create(**request)
         except anthropic.APITimeoutError as exc:
-            raise ModelUnavailable(f"The model timed out: {exc}") from exc
+            raise ModelTimeout(f"The model timed out: {exc}") from exc
         except anthropic.RateLimitError as exc:
             raise ModelUnavailable(f"The model is rate limited: {exc}") from exc
         except anthropic.APIConnectionError as exc:

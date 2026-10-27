@@ -993,6 +993,110 @@ def test_a_tool_that_may_be_refused_is_still_judged_when_it_succeeds(runner) -> 
     assert not result.assessment.passed
 
 
+def test_the_first_timeout_does_not_stop_the_run_but_the_second_does(tmp_path) -> None:
+    from app.providers.llm import ModelTimeout
+
+    budget = _budget(tmp_path, cap=10)
+    model = BudgetedModel(_Raises(ModelTimeout("timed out")), budget)
+
+    with pytest.raises(ModelTimeout):
+        _respond(model)
+    assert model.halt_reason is None and model.scenario_timed_out and model.timeouts == 1
+    assert budget.unknown_requests == 1 and budget.spent_usd > 0
+
+    model.begin_scenario()
+    assert not model.scenario_timed_out
+
+    with pytest.raises(ModelTimeout):
+        _respond(model)
+    assert model.timeouts == 2 and "timeout number 2" in model.halt_reason
+    with pytest.raises(BudgetRefused, match="stopped"):
+        _respond(model)
+    entries = json.loads((tmp_path / "ledger.json").read_text())["entries"]
+    assert [e["outcome"] for e in entries] == ["timeout", "timeout"]
+
+
+@pytest.mark.parametrize("message", ["rate limited (429)", "the model rejected the request: 401", "overloaded (529)", "credit balance too low"])
+def test_any_other_error_still_stops_at_once(tmp_path, message: str) -> None:
+    model = BudgetedModel(_Raises(ModelUnavailable(message)), _budget(tmp_path))
+
+    with pytest.raises(ModelUnavailable):
+        _respond(model)
+
+    assert model.halt_reason is not None and model.timeouts == 0
+
+
+class _TimesOutFirst:
+    """Times out on its first request, then behaves like a model that answers every request with one sentence."""
+
+    model_name = "x"
+
+    def __init__(self, timeouts: int = 1) -> None:
+        self.left = timeouts
+
+    def respond(self, *, system, messages, tools):
+        from app.providers.llm import ModelTimeout
+
+        if self.left:
+            self.left -= 1
+            raise ModelTimeout("timed out")
+        from dataclasses import replace
+
+        return replace(say("Certainly."), input_tokens=10, output_tokens=5, latency_ms=1)
+
+
+def test_a_scenario_that_times_out_is_not_scored_and_the_next_one_runs(runner, tmp_path) -> None:
+    budget = _budget(tmp_path, cap=50, cost=Decimal("3.00"))
+    model = BudgetedModel(_TimesOutFirst(), budget)
+    runner._model = model
+
+    first = runner.run_real(scenarios.by_name(("book_tomorrow",))[0])
+    second = runner.run_real(scenarios.by_name(("price_question",))[0])
+
+    assert first.not_scored == "timeout" and first.halted is None
+    assert len(first.trace.turns) == 1  # nothing more was sent for the scenario that timed out
+    assert second.not_scored is None and second.assessment.passed
+    assert model.halt_reason is None and budget.unknown_requests == 1
+
+
+def test_not_scored_is_neither_pass_nor_fail_in_the_results(runner, tmp_path) -> None:
+    from app.evals.scoring import ScenarioResult, score
+
+    budget = _budget(tmp_path, cap=50, cost=Decimal("3.00"))
+    runner._model = BudgetedModel(_TimesOutFirst(), budget)
+    done = [
+        runner.run_real(scenarios.by_name(("book_tomorrow",))[0]),
+        runner.run_real(scenarios.by_name(("price_question",))[0]),
+    ]
+    report = score(
+        [ScenarioResult(scenario=r.scenario.scenario, trace=r.trace, assessment=r.assessment) for r in done if not r.not_scored],
+        "r1",
+    )
+
+    document = results.build(done, report, {"ledger": {"spent_usd_counted": "0.01", "cost_cap_usd": "3.00", "requests_of_unknown_cost": 1}})
+
+    summary = document["summary"]
+    assert summary["scenarios"] == 2 and summary["passed"] == 1 and summary["failed"] == 0
+    assert summary["not_scored"] == 1 and summary["not_scored_names"] == ["book_tomorrow"]
+    assert summary["task_passed"] == 0 and summary["task_total"] == 1  # book_tomorrow is a task scenario, unscored
+    first = document["scenarios"][0]
+    assert first["passed"] is None and first["not_scored"] == "timeout"
+    text = results.markdown(document)
+    assert "not scored (timeout)" in text and "neither pass nor fail" in text
+    assert "unknown cost counted at their maximum" in text
+
+
+def test_a_second_timeout_in_the_run_stops_it(runner, tmp_path) -> None:
+    model = BudgetedModel(_TimesOutFirst(timeouts=2), _budget(tmp_path, cap=50, cost=Decimal("3.00")))
+    runner._model = model
+
+    first = runner.run_real(scenarios.by_name(("book_tomorrow",))[0])
+    second = runner.run_real(scenarios.by_name(("book_next_monday",))[0])
+
+    assert first.not_scored == "timeout" and first.halted is None
+    assert second.not_scored == "timeout" and second.halted and "timeout number 2" in second.halted
+
+
 def test_the_clock_of_the_scenario_is_the_clock_of_the_call(runner) -> None:
     """On Monday after noon, ten o'clock this morning is refused by the calendar, whatever the model asks."""
     model = FakeModel(
