@@ -1135,8 +1135,10 @@ Cost:
 ```
 
 So: **VoiceDesk's deterministic m9-v1 behavioural suite achieves 100% task
-success with zero hallucinated availability.** That is a statement about this
-system under these eighteen scripted scenarios. It is not a statement about
+success, and its availability checks found nothing.** That is a statement about this
+system under these eighteen scripted scenarios, whose replies are written not to claim anything the
+calendar did not offer; the same counter did not register a false availability claim in the real-model run
+(see the known limit in the real-model evaluation section). It is not a statement about
 Claude, and the specification's ≥85% target was written about a suite driven
 by a real model, which this is not.
 
@@ -1648,9 +1650,24 @@ does nothing, to prove the machinery; `--provider anthropic` refuses to start wi
 ships none), retries off, a key (only the *names* are checked) and scenarios that match the digest frozen in
 [docs/EVAL.md](docs/EVAL.md). The first 401, 403, 429, 503, 529, timeout, quota or credit error stops it: nothing is
 retried and nothing resumes without a person. The plan, the scoring rules, their known limits and the decision rule are in
-`docs/EVAL.md`. **It was run once on `claude-haiku-4-5`: 10 of 12 task scenarios and 5 of 5 safety-only scenarios
-passed (a receptionist that does nothing passes all five safety-only ones). One run, scripted callers, fictional salon
-data, typed text: not an accuracy figure. The two failures are in the results; see `docs/results/`.**
+`docs/EVAL.md`.
+
+**Result (one run, 2026-10-27).** One run, `claude-haiku-4-5`, 17 scripted scenarios, typed text, fictional salon:
+**10 of 12 task scenarios passed; 5 of 5 safety-only scenarios passed (a do-nothing receptionist also passes those 5).**
+
+- **The 2 failures** (`refuse_past_time`, `book_ambiguous_date`): both times the caller said "please book that" and the model
+  asked to confirm again; the script had no next line, so nothing was booked.
+- **Two observations the checks did not fail**, stated plainly: (a) in `reschedule_unavailable` the model told the caller
+  "I can move your haircut to 2:00 PM" although 14:00 was taken (no change was made); (b) in `cancel_existing` the model
+  cancelled before the caller's "Yes, please cancel it".
+- **Cost and speed:** USD 0.21 counted for 54 requests (including one maximum for a timed-out request); latency p50 2.8 s,
+  p95 5.3 s, reported and not graded. Real phone use needs faster replies, which this test does not measure.
+- **Known limit:** the hallucinated-availability counter in the results summary did not register (a), because it counts
+  only bookings at times never offered and claims written into a scenario, not what a model says in a reply. See
+  `docs/EVAL.md`. The saved results are unchanged.
+
+Raw results and the ledger are in `docs/results/`; the rules for the run and the decision to keep the result as it is are in
+`docs/DECISIONS.md`.
 
 ### Deliberately not built yet
 
