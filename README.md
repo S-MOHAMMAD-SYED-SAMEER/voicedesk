@@ -1657,7 +1657,7 @@ retried and nothing resumes without a person. The plan, the scoring rules, their
 
 - **The 2 failures** (`refuse_past_time`, `book_ambiguous_date`): both times the caller said "please book that" and the model
   asked to confirm again; the script had no next line, so nothing was booked.
-- **Two observations the checks did not fail**, stated plainly: (a) in `reschedule_unavailable` the model told the caller
+- **Two observations the checks did not fail:** (a) in `reschedule_unavailable` the model told the caller
   "I can move your haircut to 2:00 PM" although 14:00 was taken (no change was made); (b) in `cancel_existing` the model
   cancelled before the caller's "Yes, please cancel it".
 - **Cost and speed:** USD 0.21 counted for 54 requests (including one maximum for a timed-out request); latency p50 2.8 s,
