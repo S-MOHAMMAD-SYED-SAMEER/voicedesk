@@ -60,3 +60,11 @@ The full pack is run **once**, with the command in [EVAL.md](EVAL.md) (`claude-h
 
 Implemented as `ModelTimeout` (a kind of `ModelUnavailable`), `BudgetedModel` (one tolerated timeout), and `not_scored` on the
 result; tests pin each rule. No scenario, rule or prompt text changed to do so, so the sha256 is the same.
+
+## 2026-10-27: the real-run result is kept as it is; approved by Sameer
+
+Result kept as-is; the two observed behaviours (false availability claim, cancel before confirmation) are candidates for
+v1.1, which would need a new frozen pack and a new run reported beside this one.
+
+No fix and no re-run follow from the result. The saved results are not edited, including their `hallucinated_availability`
+field; the limit that explains why that counter missed the false availability claim is written in [EVAL.md](EVAL.md).
