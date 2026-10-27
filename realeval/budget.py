@@ -31,6 +31,7 @@ from app.providers.llm import (
     ModelError,
     ModelRefused,
     ModelResponse,
+    ModelTimeout,
     ToolDefinition,
 )
 
@@ -39,6 +40,8 @@ DEFAULT_LEDGER = Path(__file__).resolve().parent.parent / "var" / "real_eval_led
 #: Used only before any real cost has been seen: about 3 characters to a token, and the output ceiling.
 CHARACTERS_PER_TOKEN = 3
 ASSUMED_OUTPUT_TOKENS = 1024
+#: The second timeout anywhere in a run stops it; the first only leaves its scenario "not scored (timeout)".
+MAX_TIMEOUTS = 2
 TOKENS_PER_MILLION = Decimal(1_000_000)
 
 
@@ -213,6 +216,9 @@ class BudgetedModel:
         self.requests: list[dict] = []
         #: Set by the first failure that means "stop"; the runner checks it after every turn.
         self.halt_reason: str | None = None
+        #: One timeout is tolerated: that scenario is "not scored (timeout)" and the run goes on. A second stops it.
+        self.timeouts = 0
+        self.scenario_timed_out = False
 
     @property
     def call_count(self) -> int:
@@ -221,6 +227,9 @@ class BudgetedModel:
     @property
     def model_name(self) -> str:
         return getattr(self._inner, "model_name", "")
+
+    def begin_scenario(self) -> None:
+        self.scenario_timed_out = False
 
     def _projected_cost(
         self, system: str, messages: Sequence[Message], tools: Sequence[ToolDefinition] = ()
@@ -255,6 +264,16 @@ class BudgetedModel:
             request["latency_ms"] = _elapsed_ms(started)
             self.budget.record(
                 index, None, (None, None), self.model_name, latency_ms=request["latency_ms"], outcome="refused"
+            )
+            raise
+        except ModelTimeout as exc:
+            self.timeouts += 1
+            self.scenario_timed_out = True
+            request["latency_ms"] = _elapsed_ms(started)
+            if self.timeouts >= MAX_TIMEOUTS:
+                self.halt_reason = f"timeout number {self.timeouts} (the limit is {MAX_TIMEOUTS - 1}): {str(exc)[:200]}"
+            self.budget.record(
+                index, None, (None, None), self.model_name, latency_ms=request["latency_ms"], outcome="timeout"
             )
             raise
         except ModelError as exc:

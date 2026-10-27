@@ -51,6 +51,8 @@ class RealResult:
     #: Things noticed and written down but not counted against the scenario (see `OBSERVATION_CATEGORIES`).
     observations: list[Finding] = field(default_factory=list)
     halted: str | None = None
+    #: Why the scenario has no verdict ("timeout"): neither pass nor fail. `None` for a scored scenario.
+    not_scored: str | None = None
 
 
 class RealEvalRunner(EvalRunner):
@@ -69,6 +71,9 @@ class RealEvalRunner(EvalRunner):
         self._now = item.now
         self._staff = []
         start = getattr(self._model, "call_count", 0)
+        begin = getattr(self._model, "begin_scenario", None)
+        if begin is not None:
+            begin()
         trace = self.run(item.scenario)
         trace.model_calls = getattr(self._model, "call_count", 0) - start
         assessment = assess(item.scenario, trace)
@@ -95,6 +100,7 @@ class RealEvalRunner(EvalRunner):
             staff_requests=list(self._staff),
             observations=observations,
             halted=getattr(self._model, "halt_reason", None),
+            not_scored="timeout" if getattr(self._model, "scenario_timed_out", False) else None,
         )
 
     # --- hooks the scripted runner already has ------------------------------
@@ -117,6 +123,9 @@ class RealEvalRunner(EvalRunner):
             self._record_cost(session, result, NoSpeechUsage())
             if getattr(model, "halt_reason", None):
                 # The first stop-rule error ends the run; nothing more is sent.
+                break
+            if getattr(model, "scenario_timed_out", False):
+                # One timeout: this scenario has no verdict, so nothing more is sent for it; the run goes on.
                 break
 
     def _record_cost(self, session: Session, result: object, speech: object) -> None:

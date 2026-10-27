@@ -100,5 +100,9 @@ class ModelUnavailable(ModelError):
     """The provider could not be reached, or would not serve the request."""
 
 
+class ModelTimeout(ModelUnavailable):
+    """The request did not finish inside the time allowed. It may still have been billed."""
+
+
 class ModelRefused(ModelError):
     """The model declined to answer."""

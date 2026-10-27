@@ -374,3 +374,15 @@ def test_no_api_key_is_needed_to_build_the_provider() -> None:
     model, _ = _model(StubResponse([{"type": "text", "text": "hi"}]))
 
     assert model.respond(system="s", messages=MESSAGES, tools=TOOLS).text == "hi"
+
+
+def test_a_timeout_is_named_a_timeout_so_a_run_can_tell_it_from_a_refusal_to_serve() -> None:
+    from app.providers.llm import ModelTimeout
+
+    model, _ = _model(
+        error=anthropic.APITimeoutError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
+    )
+
+    with pytest.raises(ModelTimeout):
+        model.respond(system="s", messages=MESSAGES, tools=TOOLS)
+    assert issubclass(ModelTimeout, ModelUnavailable)

@@ -90,11 +90,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "it will not be resumed without a person.",
             file=sys.stderr,
         )
-        _write_partial(done, arguments, exc.reason)
+        _write_partial(done, arguments, exc.reason, settings, budget)
         return STOPPED
 
     report = score(
-        [ScenarioResult(scenario=r.scenario.scenario, trace=r.trace, assessment=r.assessment) for r in done],
+        [
+            ScenarioResult(scenario=r.scenario.scenario, trace=r.trace, assessment=r.assessment)
+            for r in done
+            if not r.not_scored
+        ],
         REAL_EVAL_VERSION,
     )
     document = results.build(done, report, _meta(arguments, settings, budget, done))
@@ -171,9 +175,11 @@ def _check_frozen() -> None:
 
 
 def _progress(result: RealResult, budget: RunBudget | None) -> None:
-    status = "pass" if result.assessment.passed else "FAIL"
+    status = "n/s" if result.not_scored else ("pass" if result.assessment.passed else "FAIL")
     used = f"  [{budget.requests_used} of {budget.request_cap} requests, {budget.describe_spend()}]" if budget else ""
     print(f"  {status:4}  {result.scenario.name}{used}", flush=True)
+    if result.not_scored:
+        print(f"          NOT SCORED ({result.not_scored}): neither pass nor fail", flush=True)
     for finding in result.assessment.findings:
         if finding.blocking:
             print(f"          {finding.category}: {finding.observed}", flush=True)
@@ -225,10 +231,22 @@ def _write(document: dict, out: Path, arguments) -> None:
     print(f"wrote {out / stem}.json and .md")
 
 
-def _write_partial(done: list[RealResult], arguments, reason: str) -> None:
-    """Kept outside docs/results, for a person to read: what happened before the stop."""
+def _write_partial(done: list[RealResult], arguments, reason: str, settings=None, budget=None) -> None:
+    """Kept outside docs/results, for a person to read: what happened before the stop. Not a result."""
     folder = ROOT / "var" / "real_eval_partial"
     folder.mkdir(parents=True, exist_ok=True)
+    if done and settings is not None:
+        scored = [
+            ScenarioResult(scenario=r.scenario.scenario, trace=r.trace, assessment=r.assessment)
+            for r in done
+            if not r.not_scored
+        ]
+        document = results.build(done, score(scored, REAL_EVAL_VERSION), _meta(arguments, settings, budget, done))
+        document["meta"]["stopped"] = reason
+        (folder / "partial-results.json").write_text(
+            json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        (folder / "partial-results.md").write_text(results.markdown(document), encoding="utf-8")
     payload = {
         "stopped": reason,
         "completed_scenarios": [r.scenario.name for r in done],
