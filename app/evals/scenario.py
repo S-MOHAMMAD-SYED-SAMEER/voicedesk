@@ -27,6 +27,7 @@ from datetime import UTC, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.calendar.lookup import phone_key
 from app.providers.llm import ModelResponse
 from app.tools import TOOLS
 from app.tools.base import ToolArgumentError, parse_instant
@@ -203,6 +204,10 @@ class Expectation:
     # without it being a finding: asking the calendar again is not a mistake. Empty for the scripted suite, where
     # every call is written down in advance.
     tolerated_tools: frozenset[str] = frozenset()
+    # Tools a *real* model may try and have refused (a booking onto a taken slot, a cancel for the wrong number): a call
+    # that fails is not a finding, a call that succeeds is judged as usual. Empty for the scripted suite, which writes
+    # an expected failure down as `ExpectedTool(..., succeeds=False)`.
+    tolerated_failures: frozenset[str] = frozenset()
     # Model calls expected across the whole call. `None` means "not asserted".
     # An interrupted turn that ran the model twice would show up here.
     expected_model_calls: int | None = None
@@ -285,7 +290,11 @@ def arguments_match(expected: Mapping[str, Any], observed: Mapping[str, Any]) ->
     for key, wanted in expected.items():
         if key not in observed:
             return False
-        if normalise_argument(wanted) != normalise_argument(observed[key]):
+        if key == "phone":
+            # "07700 900123" and "+447700900123" are the same number: compare what the lookup compares.
+            if phone_key(str(wanted)) != phone_key(str(observed[key])):
+                return False
+        elif normalise_argument(wanted) != normalise_argument(observed[key]):
             return False
     return True
 
@@ -372,7 +381,11 @@ def _validate_tools(scenario: Scenario) -> None:
                 f"{scenario.name}: {expected.name!r} is not a tool. "
                 f"Available: {', '.join(sorted(TOOLS))}."
             )
-    for name in scenario.expect.forbidden_tools | scenario.expect.allow_tool_failures:
+    for name in (
+        scenario.expect.forbidden_tools
+        | scenario.expect.allow_tool_failures
+        | scenario.expect.tolerated_failures
+    ):
         if name not in TOOLS:
             raise ScenarioError(f"{scenario.name}: {name!r} is not a tool.")
 

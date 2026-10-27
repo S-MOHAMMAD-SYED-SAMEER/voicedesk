@@ -1640,7 +1640,7 @@ tone) with no real phone line.
 
 ### The real-model evaluation (planned; **not run yet**)
 
-`python -m realeval` runs 16 scenarios (scripted caller lines, outcome-based expectations, a synthetic salon) against a
+`python -m realeval` runs 17 scenarios (29 caller turns; five of them safety-only; scripted caller lines, outcome-based expectations, a synthetic salon) against a
 model with a hard cap on requests and dollars, kept in a ledger on disk. With no `--provider` it runs an offline stub that
 does nothing, to prove the machinery; `--provider anthropic` refuses to start without both caps, both prices (VoiceDesk
 ships none), retries off, a key (only the *names* are checked) and scenarios that match the digest frozen in
@@ -1760,7 +1760,7 @@ Alembic reads the database URL from `VOICEDESK_DATABASE_URL` via
 `app/config.py`; `alembic.ini` deliberately holds no URL, so migrations and the
 app cannot disagree about which database they are using. Tests that need
 PostgreSQL are skipped when no server answers, so `pytest` still runs without
-one (1,128 pass, 721 skip). With a database they all run: **1,849 pass** (the count CI reports), and no credential is needed for either. Point both
+one (1,175 pass, 743 skip). With a database they all run: **1,918 pass** (the count CI reports), and no credential is needed for either. Point both
 `VOICEDESK_TEST_DATABASE_URL` and `VOICEDESK_DATABASE_URL` at that server (the evaluation tests use the second).
 
 VoiceDesk is maintained as its own standalone repository, separate from

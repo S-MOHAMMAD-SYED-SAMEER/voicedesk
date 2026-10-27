@@ -10,9 +10,13 @@ from typing import Any
 
 from app.evals.scoring import Report
 from realeval.runner import RealResult
+from realeval.scenarios import SCENARIOS
+
+_CALLER_TURNS = sum(len(item.scenario.script) for item in SCENARIOS)
 
 LIMITS = (
-    "Synthetic salon, 16 scenarios (27 caller turns), scripted caller lines that cannot adapt, one model, one run, default sampling. "
+    f"Synthetic salon, {len(SCENARIOS)} scenarios ({_CALLER_TURNS} caller turns), scripted caller lines that cannot adapt, one model, one run, default sampling. "
+    f"{sum(item.safety_only for item in SCENARIOS)} of them are safety-only: a receptionist that does nothing passes them, so they show that no harm was done, not that the job was done. "
     "Typed text: no speech, no telephony, no real caller. Expectations drafted by Claude, reviewed by ChatGPT and "
     "Claude, approved by Sameer, and frozen before the run. Not an accuracy figure and not evidence of how the "
     "receptionist behaves on a real call."
@@ -36,6 +40,7 @@ def _scenario(result: RealResult) -> dict[str, Any]:
         "description": result.scenario.scenario.description,
         "now": result.scenario.now.isoformat(),
         "passed": result.assessment.passed,
+        "safety_only": result.scenario.safety_only,
         "findings": [
             {
                 "category": finding.category,
@@ -93,6 +98,10 @@ def build(results: list[RealResult], report: Report, meta: dict[str, Any]) -> di
             "scenarios": len(results),
             "passed": passed,
             "failed": len(results) - passed,
+            "safety_only_passed": sum(1 for r in results if r.scenario.safety_only and r.assessment.passed),
+            "safety_only_total": sum(1 for r in results if r.scenario.safety_only),
+            "task_passed": sum(1 for r in results if not r.scenario.safety_only and r.assessment.passed),
+            "task_total": sum(1 for r in results if not r.scenario.safety_only),
             "blocking_findings": len(unflagged),
             "findings_by_category": {c: unflagged.count(c) for c in sorted(set(unflagged))},
             "observations": sum(len(r.observations) for r in results),
@@ -117,14 +126,17 @@ def markdown(document: dict[str, Any]) -> str:
         f"Scenario pack `{meta.get('real_eval_version')}` (`real-eval-sha256` {meta.get('dataset_sha256')}). "
         f"Provider: {meta.get('provider')}.",
         "",
-        f"**{summary['passed']} of {summary['scenarios']} scenarios passed**; {summary['blocking_findings']} blocking "
-        f"finding(s) {summary['findings_by_category']}; {summary['model_requests']} model request(s); "
-        f"USD {summary['cost_usd']}.",
+        f"**{summary['passed']} of {summary['scenarios']} scenarios passed**: "
+        f"{summary['task_passed']} of {summary['task_total']} task scenarios and "
+        f"{summary['safety_only_passed']} of {summary['safety_only_total']} safety-only scenarios. "
+        f"{summary['blocking_findings']} blocking finding(s) {summary['findings_by_category']}; "
+        f"{summary['model_requests']} model request(s); USD {summary['cost_usd']}.",
         "",
-        "| Scenario | Result | Findings |",
-        "|---|---|---|",
+        "| Scenario | Kind | Result | Findings |",
+        "|---|---|---|---|",
     ]
     for scenario in document["scenarios"]:
         found = "; ".join(f"{f['category']}: {f['observed']}" for f in scenario["findings"] if f["blocking"]) or "none"
-        lines.append(f"| {scenario['name']} | {'pass' if scenario['passed'] else '**FAIL**'} | {found} |")
+        kind = "safety-only" if scenario["safety_only"] else "task"
+        lines.append(f"| {scenario['name']} | {kind} | {'pass' if scenario['passed'] else '**FAIL**'} | {found} |")
     return "\n".join(lines) + "\n"
