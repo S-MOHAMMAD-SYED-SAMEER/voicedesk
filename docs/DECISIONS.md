@@ -68,3 +68,10 @@ v1.1, which would need a new frozen pack and a new run reported beside this one.
 
 No fix and no re-run follow from the result. The saved results are not edited, including their `hallucinated_availability`
 field; the limit that explains why that counter missed the false availability claim is written in [EVAL.md](EVAL.md).
+
+## 2026-10-27: one more v1.1 candidate, from the video take; approved by Sameer
+
+In the video take (not part of the measured run) the model also booked before the caller's yes. With the cancel-before-confirmation in the run, v1.1 should test that the AI waits for the caller's confirmation before any booking, cancel or reschedule.
+
+The video take is one recording of the frozen `book_tomorrow` scenario, made separately from the full run; it is not a result and changes no number in the run's record.
+
