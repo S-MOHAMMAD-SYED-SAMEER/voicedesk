@@ -140,6 +140,13 @@ IDEAL: dict[str, Ideal] = {
         [Tool("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]}), Say("I can see your haircut on Monday at 10:00. What time would you like instead?")],
         [_check("2026-03-02"), Tool("reschedule", lambda r: {"appointment_id": _first_appointment(r), "new_starts_at": TWO}), Say("That's moved to 14:00.")],
     ),
+    "reschedule_unavailable": Ideal(
+        [Tool("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]}), Say("I can see your haircut on Monday at 10:00. What time would you like instead?")],
+        [
+            _check("2026-03-02"),
+            Say("I'm sorry, 14:00 is already taken, so I've left your booking at 10:00. I could offer 14:30 instead."),
+        ],
+    ),
     "cancel_existing": Ideal(
         [Tool("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]}), Say("I can see your haircut on Monday at 10:00. Shall I cancel it?")],
         [Tool("cancel", lambda r: {"appointment_id": _first_appointment(r)}), Say("That's cancelled.")],
@@ -176,6 +183,10 @@ MISTAKE: dict[str, Ideal] = {
     "book_changes_mind": Ideal([_check("2026-03-02"), Say("10:00 is free.")], [_book(TEN, *ADA), Say("Booked.")]),
     "book_ambiguous_date": Ideal([_check("2026-03-10"), Say("Tuesday the 10th is free.")], [_book("2026-03-10T14:00:00+00:00", *BEA), Say("Booked.")]),
     "reschedule_existing": Ideal([_check("2026-03-02"), Say("14:00 is free.")], [_book(TWO, *ADA), Say("Done.")]),
+    "reschedule_unavailable": Ideal(
+        [Tool("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]}), Say("Which time?")],
+        [Tool("cancel", lambda r: {"appointment_id": _first_appointment(r)}), Say("I've cancelled it, you can rebook.")],
+    ),
     "cancel_existing": Ideal([Say("Certainly.")], [Say("Cancelled, I think.")]),
     "cancel_wrong_number": Ideal(
         [Tool("find_appointments", {"customer_name": ADA[0], "phone": ADA[1]}), Say("I found your haircut on Monday at 10:00.")],

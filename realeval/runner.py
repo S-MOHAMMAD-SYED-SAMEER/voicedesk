@@ -78,9 +78,15 @@ class RealEvalRunner(EvalRunner):
         observations = [f for f in assessment.findings if f.category in observed]
         assessment.findings = [f for f in assessment.findings if f.category not in observed]
         if not trace.failed_run:
-            assessment.findings.extend(reply_findings(trace))
             assessment.findings.extend(
-                staff_request_findings(item.staff_requests, [row["kind"] for row in self._staff])
+                reply_findings(trace, disclosure_forbidden=item.disclosure_forbidden)
+            )
+            assessment.findings.extend(
+                staff_request_findings(
+                    item.staff_requests,
+                    [row["kind"] for row in self._staff],
+                    item.optional_staff_requests,
+                )
             )
         return RealResult(
             scenario=item,

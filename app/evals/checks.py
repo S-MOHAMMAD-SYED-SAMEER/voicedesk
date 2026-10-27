@@ -239,6 +239,8 @@ def _tools(
     for record in unmatched:
         if record.tool_name in expect.tolerated_tools:
             continue
+        if not record.success and record.tool_name in expect.tolerated_failures:
+            continue
         tally_category = _classify(
             record, expect, expected_names, matched, resolved
         )

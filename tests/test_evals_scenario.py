@@ -118,6 +118,21 @@ def test_arguments_do_not_match_when_a_value_differs() -> None:
     assert not arguments_match({"day": MONDAY}, {"day": "2026-03-03"})
 
 
+@pytest.mark.parametrize(
+    "spoken",
+    ["07700 900123", "+447700900123", "+44 7700 900123", "(07700) 900-123", "447700900123", "00447700900123"],
+)
+def test_a_phone_number_matches_by_its_digits(spoken: str) -> None:
+    """The lookup compares the last nine digits; so does the evaluator, or a correct lookup would be marked wrong."""
+    assert arguments_match({"phone": "+447700900123"}, {"phone": spoken})
+    assert arguments_match({"phone": "07700 900123"}, {"phone": spoken})
+
+
+@pytest.mark.parametrize("spoken", ["07700 900999", "+447700900124", "900123", ""])
+def test_a_different_phone_number_does_not_match(spoken: str) -> None:
+    assert not arguments_match({"phone": "07700 900123"}, {"phone": spoken})
+
+
 def test_an_empty_expectation_matches_anything() -> None:
     assert arguments_match({}, {"anything": "at all"})
 

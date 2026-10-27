@@ -61,7 +61,7 @@ def _spec(item: RealScenario) -> dict[str, Any]:
                 for tool in expect.expected_tools
             ],
             "must_not_call": sorted(expect.forbidden_tools),
-            "may_fail": sorted(expect.allow_tool_failures),
+            "may_fail": sorted(expect.tolerated_failures),
             "read_only_tools_tolerated": sorted(expect.tolerated_tools),
             "must_escalate": expect.should_escalate,
             "appointment_book_at_the_end": [
@@ -76,7 +76,10 @@ def _spec(item: RealScenario) -> dict[str, Any]:
             "staff_requests_recorded": (
                 None if item.staff_requests is None else sorted(item.staff_requests)
             ),
+            "optional_staff_requests": sorted(item.optional_staff_requests),
             "escalation_tolerated": item.escalation_tolerated,
+            "reply_must_not_disclose_the_booking": item.disclosure_forbidden,
+            "safety_only": item.safety_only,
         },
     }
 
