@@ -23,17 +23,26 @@ findings next to it; it is not an accuracy figure.
 | | |
 |---|---|
 | Model | `claude-haiku-4-5` (`VOICEDESK_DIALOGUE_MODEL`); the API's resolved ID is recorded |
-| Request options | no thinking, no effort (not sent), `max_tokens` 1024, **timeout 15 s, SDK `max_retries=0`** |
+| Request options | no thinking, no effort (not sent), `max_tokens` 1024, **timeout 60 s for the evaluation only (`--timeout-seconds`, default 60; the application keeps its own 15 s), SDK `max_retries=0`** |
 | Prompt | `p3.1` (`SYSTEM_PROMPT_VERSION`), with the date, time and time zone appended each turn |
-| Caps | **200 requests and USD 3.00 for the whole piece of work** (smoke, runs, recording); counted before each request in `var/real_eval_ledger.json`; both logged; stop at either |
+| Caps | **200 requests and USD 3.00 for the whole piece of work** (smoke, runs, recording); counted before each request in `var/real_eval_ledger.json`; both logged; stop at either. **A request that gets no answer (timeout, error, refusal) may still be billed, so it is never counted as USD 0: its cost is recorded as "unknown, at most USD x" (estimated input tokens, tools included, plus `max_tokens` at the given prices) and that maximum counts against the USD 3.00 cap.** Each request's latency is recorded in the ledger |
 | Prices | **USD 1 per million input tokens and USD 5 per million output tokens** for `claude-haiku-4-5` (the same figures verified for DocIntel), given on the command line (`--input-usd-per-mtok 1 --output-usd-per-mtok 5`) because VoiceDesk ships no prices; recorded in the ledger. Costs are computed from the recorded token counts, not an invoice |
 | Key | in the git-ignored `.env` only (`VOICEDESK_ANTHROPIC_API_KEY` or `ANTHROPIC_API_KEY`); never printed, never read by me; only the *names* are checked |
 | Stop rule | the first 401, 403, 429, 503, 529, timeout, quota or credit error stops the run. **No retry loops. No resume without Sameer.** A refusal by the model is its answer to one request, not a stop |
 
+### The 60 s timeout, and what it does not mean
+
+The 60 s limit is **for this evaluation only**. A caller on a telephone who has heard nothing for 15 s has hung up, so the
+application's own limit stays 15 s. Real phone use needs a much faster reply, and **this test does not measure that**:
+the receptionist is not graded on latency. Latency per request is recorded in the ledger and reported separately in the
+results (p50 and p95, nearest rank), with that caveat beside it. The setting lives in `app/config.py`
+(`dialogue_timeout_seconds`), outside the frozen files, so changing it does not change `real-eval-sha256`.
+
 ## Order, and the request budget
 
-1. **One smoke request** through the browser harness's real path (one caller sentence): confirms the model ID is valid and
-   the request shape (`strict` tools, no thinking) is accepted. Not part of any result.
+1. **One smoke request** (`python -m realeval.smoke`: the real system prompt, the clock line, the seven tools and one caller
+   sentence; no tool is run): confirms the model ID is valid and the request shape (`strict` tools, no thinking) is accepted.
+   Not part of any result. The first attempt timed out at 15 s (2026-10-27) and counts against the caps like any request.
 2. **The pack, once** (`python -m realeval --provider anthropic --request-cap 200 --max-cost-usd 3.00 --input-usd-per-mtok 1 --output-usd-per-mtok 5 --out docs/results`): about 65 to 80 requests (29 caller turns; a booking
    turn is usually two requests, a lookup and a change are one each, the rest one or two).
 3. **The recording**, later, in its own session, same format and AI voice as the other videos: about 15 to 20 requests a

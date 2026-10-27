@@ -27,7 +27,14 @@ from app.config import Settings, get_settings
 from app.evals.database import EvalDatabaseError
 from app.evals.scoring import ScenarioResult, score
 from realeval import REAL_EVAL_VERSION, freeze, results, scenarios
-from realeval.budget import DEFAULT_LEDGER, BudgetedModel, Prices, RunBudget, RunStopped
+from realeval.budget import (
+    DEFAULT_LEDGER,
+    BudgetedModel,
+    Prices,
+    RunBudget,
+    RunStopped,
+    latency_summary,
+)
 from realeval.runner import RealEvalRunner, RealResult
 from realeval.stub import StubModel
 
@@ -35,6 +42,9 @@ CANNOT_RUN = 2
 STOPPED = 3
 ROOT = Path(__file__).resolve().parent.parent
 EVAL_DOC = ROOT / "docs" / "EVAL.md"
+#: The model timeout for an evaluation run. The application's own limit (15 s, `Settings.dialogue_timeout_seconds`) is
+#: for a caller on a telephone and is untouched; this one is for the evaluation only.
+EVAL_TIMEOUT_SECONDS = 60.0
 KEY_NAMES = ("VOICEDESK_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
 
 
@@ -108,6 +118,8 @@ def _model(arguments: argparse.Namespace):
         raise CannotRun(
             "VoiceDesk ships no prices: give --input-usd-per-mtok and --output-usd-per-mtok (the model's price per million tokens)"
         )
+    if not 0 < float(arguments.timeout_seconds) <= 120:
+        raise CannotRun("--timeout-seconds must be between 0 and 120")
     try:
         prices = Prices(Decimal(arguments.input_usd_per_mtok), Decimal(arguments.output_usd_per_mtok))
         cap = Decimal(arguments.max_cost_usd)
@@ -131,12 +143,13 @@ def _model(arguments: argparse.Namespace):
         update={
             "llm_input_usd_per_mtok": str(prices.input_per_mtok),
             "llm_output_usd_per_mtok": str(prices.output_per_mtok),
+            "dialogue_timeout_seconds": float(arguments.timeout_seconds),
         }
     )
     print(
         f"REAL RUN: {settings.dialogue_model}, timeout {settings.dialogue_timeout_seconds:g}s, retries "
         f"{settings.dialogue_max_retries}. Ledger {arguments.ledger}: {budget.requests_used} of {budget.request_cap} "
-        f"requests and USD {budget.spent_usd} of {budget.cost_cap_usd} used.",
+        f"requests and {budget.describe_spend()} of USD {budget.cost_cap_usd} used.",
         flush=True,
     )
     return BudgetedModel(build_model(settings), budget), budget, settings
@@ -159,7 +172,7 @@ def _check_frozen() -> None:
 
 def _progress(result: RealResult, budget: RunBudget | None) -> None:
     status = "pass" if result.assessment.passed else "FAIL"
-    used = f"  [{budget.requests_used} of {budget.request_cap} requests, USD {budget.spent_usd:.4f}]" if budget else ""
+    used = f"  [{budget.requests_used} of {budget.request_cap} requests, {budget.describe_spend()}]" if budget else ""
     print(f"  {status:4}  {result.scenario.name}{used}", flush=True)
     for finding in result.assessment.findings:
         if finding.blocking:
@@ -189,7 +202,8 @@ def _meta(arguments, settings: Settings, budget: RunBudget | None, done: list[Re
                 "request_cap": budget.request_cap,
                 "cost_cap_usd": str(budget.cost_cap_usd),
                 "requests_used": budget.requests_used,
-                "spent_usd": str(budget.spent_usd),
+                "spent_usd_counted": str(budget.spent_usd),
+                "requests_of_unknown_cost": budget.unknown_requests,
                 "prices_usd_per_mtok": {
                     "input": str(budget.prices.input_per_mtok),
                     "output": str(budget.prices.output_per_mtok),
@@ -198,6 +212,7 @@ def _meta(arguments, settings: Settings, budget: RunBudget | None, done: list[Re
             if budget
             else None
         ),
+        "latency_ms": latency_summary(budget.latencies_ms()) if budget else None,
         "synthetic": True,
     }
 
@@ -231,6 +246,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-cost-usd", default=None)
     parser.add_argument("--input-usd-per-mtok", default=None)
     parser.add_argument("--output-usd-per-mtok", default=None)
+    parser.add_argument(
+        "--timeout-seconds",
+        default=EVAL_TIMEOUT_SECONDS,
+        type=float,
+        help="Model timeout for this evaluation only (default 60). The application keeps its own 15 s.",
+    )
     parser.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     parser.add_argument("--out", default=None, metavar="DIR", help="Write the JSON and Markdown results here.")
     return parser
