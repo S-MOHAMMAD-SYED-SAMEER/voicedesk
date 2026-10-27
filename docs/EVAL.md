@@ -1,6 +1,6 @@
 # The real-model evaluation of VoiceDesk: plan, rules and record
 
-**Status: DRAFT, awaiting review and approval (the decisions after ChatGPT's review are applied; not yet frozen). No real request has been made.** This file is the plan, written before any
+**Status: FROZEN (2026-10-27) on Sameer's decisions after ChatGPT's review. No scenario, expectation or rule changes after a run. No full run has been made yet.** This file is the plan, written before any
 run. The record of runs at the end is empty.
 
 Nothing in this repository has ever been run against a real model. The scripted suite (`python -m app.evals`, version
@@ -151,7 +151,7 @@ run is the result. A scenario, an expectation or a rule is **never** changed aft
 fails if either changes, or if `scenarios.json` is no longer what `realeval/scenarios.py` produces, and the runner
 refuses to make a real request unless the digest matches.
 
-real-eval-sha256: `pending approval`
+real-eval-sha256: `f39c3f89a2b56265cb65e1fea7e62d987ebcf53794dad8aa289c089b46bc2682`
 
 ## Record of the runs
 
