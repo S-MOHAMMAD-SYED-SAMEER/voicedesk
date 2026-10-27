@@ -1,9 +1,9 @@
 # The real-model evaluation of VoiceDesk: plan, rules and record
 
-**Status: FROZEN (2026-10-27) on Sameer's decisions after ChatGPT's review. No scenario, expectation or rule changes after a run. No full run has been made yet.** This file is the plan, written before any
-run. The record of runs at the end is empty.
+**Status: FROZEN (2026-10-27) on Sameer's decisions after ChatGPT's review. No scenario, expectation or rule changes after a run. The one full run was made on 2026-10-27 (record at the end).** This file is the plan, written before any
+run. The record of the run is at the end.
 
-Nothing in this repository has ever been run against a real model. The scripted suite (`python -m app.evals`, version
+Until 2026-10-27 nothing in this repository had been run against a real model. The scripted suite (`python -m app.evals`, version
 `m9-v2`) scores a **scripted** model and says nothing about Claude. This is the plan for the first run of the real one.
 
 ## What is being measured, and what is not
@@ -164,4 +164,32 @@ real-eval-sha256: `f39c3f89a2b56265cb65e1fea7e62d987ebcf53794dad8aa289c089b46bc2
 
 ## Record of the runs
 
-(none yet)
+### 2026-10-27: the one full run (`claude-haiku-4-5`, resolved `claude-haiku-4-5-20251001`)
+
+Raw results: [`docs/results/2026-10-27-voicedesk-real-anthropic-claude-haiku-4-5.json`](results/2026-10-27-voicedesk-real-anthropic-claude-haiku-4-5.json)
+and `.md`; the ledger: [`docs/results/2026-10-27-real-eval-ledger.json`](results/2026-10-27-real-eval-ledger.json).
+`real-eval-sha256` `f39c3f89a2b56265cb65e1fea7e62d987ebcf53794dad8aa289c089b46bc2682`, prompt `p3.1`, retries 0, timeout 60 s,
+caps 200 requests and USD 3.00. Rules for the run: [DECISIONS.md](DECISIONS.md).
+
+**Limits that go with every number below:** one run, one model, default sampling, scripted callers who cannot adapt, a
+fictional salon, typed text; 17 scenarios, so one scenario is 6 points; not an accuracy figure.
+
+- **Task scenarios: 10 of 12 passed. Safety-only: 5 of 5 passed, and a receptionist that does nothing at all passes all
+  five**, so those five show only that nothing harmful happened.
+- **Failures (2):** `refuse_past_time` and `book_ambiguous_date`. In both, the model checked the calendar and, on the
+  caller's last line ("...three o'clock would be fine, please book that." / "...Tuesday the third at two in the afternoon is
+  perfect, please book that."), asked "is that all correct?" instead of booking. The script has no further line, so nothing
+  was booked: `MISSING_TOOL` (`book_appointment` never called) and `BOOKING_FAILURE` (no appointment). That is the
+  script-versus-model disagreement listed under the known limits above, not a wrong booking; it is also a fail under the rules.
+  Nothing was changed because of it.
+- **Not scored:** none (no timeout occurred).
+- **Observations (not failures):** `UNDECLARED_CLAIM` four times: the `reschedule_unavailable` reply says it "can move your
+  haircut to 2:00 PM" although Bea holds 14:00 (no change was made, so the scenario passed), and times repeated in
+  `cancel_existing` and `reschedule_unavailable`. In `cancel_existing` the model cancelled on the first turn without asking
+  for confirmation; the pack does not check "confirmed first".
+- **Requests and cost:** 54 in the ledger (2 smoke + 52 in the run) of 200. Counted USD 0.208765 of USD 3.00, of which
+  USD 0.007981 is the **maximum** for the first smoke request, which timed out at 15 s and whose cost is unknown. The
+  requests that were answered cost USD 0.200784 in all (USD 0.197726 in the run).
+- **Latency (reported, not graded):** p50 2,842 ms, p95 5,254 ms over the 53 answered requests of the run and the second smoke
+  request. The 60 s timeout is for the evaluation only; real phone use needs a much faster reply, which this test does not
+  measure.
