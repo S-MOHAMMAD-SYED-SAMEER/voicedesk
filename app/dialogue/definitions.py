@@ -1,4 +1,4 @@
-"""The six tools, as the model sees them.
+"""The seven tools, as the model sees them.
 
 These are descriptions of an interface, not a second implementation. They say
 what each argument is and how to spell it; they do not say how long a service
@@ -17,8 +17,8 @@ from typing import Any
 from app.providers.llm import ToolDefinition
 from app.tools import TOOLS
 
-# Ordered as the specification lists them, so the request bytes are stable
-# from one call to the next.
+# Ordered as the specification lists them (with `find_appointments`, which the specification does not
+# list, placed second), so the request bytes are stable from one call to the next.
 TOOL_ORDER = (
     "check_availability",
     "find_appointments",

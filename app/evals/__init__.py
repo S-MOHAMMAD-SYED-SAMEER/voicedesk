@@ -5,7 +5,7 @@
                                               trace → checks → findings → report
 
 Only the model is scripted. The dialogue layer, the executor and its
-offered-slot guard, all six tools, `CalendarService` and the database's
+offered-slot guard, all seven tools, `CalendarService` and the database's
 exclusion constraint are the ones the application runs, against an isolated
 `_evals` database that this package creates, migrates and truncates.
 

@@ -150,7 +150,7 @@ def test_the_evaluator_builds_its_world_through_the_real_calendar() -> None:
 
 
 def test_the_evaluator_defines_no_tool_of_its_own() -> None:
-    """It observes the six that exist; it does not add a seventh."""
+    """It observes the tools that exist; it does not add one."""
     from app.tools import TOOLS
 
     for module in _modules(EVALS):

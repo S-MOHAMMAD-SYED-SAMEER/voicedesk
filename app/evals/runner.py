@@ -5,7 +5,7 @@
                                               CalendarService → PostgreSQL
 
 Only the model is scripted. The dialogue layer, the executor and its
-offered-slot guard, all six tools, the calendar and the database's exclusion
+offered-slot guard, all seven tools, the calendar and the database's exclusion
 constraint are the ones the application runs. Nothing is stubbed to make a
 scenario pass, and a scenario that fails because the real system refused it is
 the suite working.

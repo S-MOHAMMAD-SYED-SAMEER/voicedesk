@@ -49,7 +49,7 @@ TOOLS: dict[str, Callable[..., ToolResult]] = {
 
 
 class UnknownTool(Exception):
-    """A name that is not one of the six tools."""
+    """A name that is not one of the registered tools."""
 
 
 def get_tool(name: str) -> Callable[..., ToolResult]:

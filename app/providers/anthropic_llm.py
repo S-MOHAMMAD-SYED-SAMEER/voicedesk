@@ -6,7 +6,7 @@ layer, the tool layer and the whole test suite run with no API key and no
 network.
 
 The request is deliberately plain: a system prompt, the conversation so far,
-the six tool definitions, and adaptive thinking with a configurable effort.
+the seven tool definitions, and adaptive thinking with a configurable effort.
 Streaming, prompt caching and cost accounting belong to the milestones that
 need them.
 """
