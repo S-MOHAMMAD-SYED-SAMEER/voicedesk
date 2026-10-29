@@ -144,7 +144,7 @@ def test_every_expected_tool_is_a_real_tool() -> None:
 
 
 def test_every_tool_is_exercised_somewhere() -> None:
-    """All six, or the suite is not evaluating the whole tool layer."""
+    """Every tool, or the suite is not evaluating the whole tool layer."""
     named = {
         expected.name
         for scenario in dataset.SCENARIOS

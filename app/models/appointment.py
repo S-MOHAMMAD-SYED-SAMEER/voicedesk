@@ -21,14 +21,15 @@ Three decisions that constraint forces:
   constraint can only reference columns of its own table, and the thing that
   must not overlap is a *person's* diary — one stylist offering two services
   must not be booked for both at once. Keeping it in step with
-  `services.staff_id` is the booking layer's job in milestone 2.
+  `services.staff_id` is the booking layer's job (`app/calendar/`).
 * **The range is half-open** (`[)`), so an appointment ending at 10:00 and one
   starting at 10:00 do not overlap.
 * **The constraint is partial**, applying only to `booked` rows, so a
   cancelled appointment stops holding its slot.
 
-No booking behaviour is implemented here — that is milestone 2. This is the
-shape the data has to have for milestone 2 to be safe.
+No booking behaviour is implemented here: this file defines the model and its
+constraint only, and the booking behaviour lives in `app/calendar/`. This is the
+shape the data has to have for that code to be safe.
 """
 
 import enum

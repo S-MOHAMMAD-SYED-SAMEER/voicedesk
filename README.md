@@ -4,14 +4,25 @@ Answers a business phone line, understands the caller, books or reschedules appo
 
 **Why this exists:** a missed call is a lost booking. The hard part is not speech — it's knowing when to stop talking and escalate.
 
+> **Read this first.** Everything down to the heading "Implementation status" is the original *specification*:
+> what VoiceDesk was asked to be, a target and not a description of what runs. What exists is described from that
+> heading down. In short: the dialogue layer, the six specified tools plus a lookup tool, and the PostgreSQL
+> calendar are built and were run on **typed text** against a real model (one run). **No telephone call has ever
+> been placed and no speech service has ever been called.** The post-call SMS or email, an actual transfer to a
+> person, the callback offer on low speech confidence, the 1.2 s latency target and the specification's
+> acceptance bar are **not built, not measured or not met**; the details are marked in the specification below and
+> collected under "Known limits" near the end.
+
 ## v1 Scope
 
-- Inbound call answered, greeting played
-- Streaming speech-to-text, LLM turn, text-to-speech reply
-- Tools: `check_availability`, `book_appointment`, `reschedule`, `cancel`, `take_message`, `transfer_to_human`
+*Each line is a target from the specification. What exists is marked.*
+
+- Inbound call answered, greeting played *(the telephony code exists and is tested against a simulated carrier; no call has been placed)*
+- Streaming speech-to-text, LLM turn, text-to-speech reply *(the speech code exists and is tested against simulated providers; no speech service has been called. The LLM turn has run on typed text)*
+- Tools: `check_availability`, `book_appointment`, `reschedule`, `cancel`, `take_message`, `transfer_to_human`, **and a seventh, `find_appointments`, added before the real-model run** *(`transfer_to_human` records a request that the team call back; it cannot connect a caller)*
 - Appointments written to a real calendar store (Postgres, with an interface ready for Google Calendar)
 - Full transcript, tool calls, latency, and cost logged per call
-- Post-call SMS/email confirmation to the caller
+- Post-call SMS/email confirmation to the caller *(**not built**)*
 - Browser-based test harness (mic in the browser) so you can develop without spending phone credits
 
 ## Non-goals (do not build)
@@ -65,16 +76,18 @@ The dialogue layer must be testable with text in, text out, no audio at all. If 
 
 ## Behaviour rules (encode in the system prompt and test them)
 
-- Never invent availability. Availability comes only from `check_availability`.
-- Confirm name, service, date and time back to the caller before calling `book_appointment`.
+*Which of these are enforced in code and which are only in the prompt is stated beside each.*
+
+- Never invent availability. Availability comes only from `check_availability`. *(Booking, rescheduling and cancelling are enforced in code: the executor refuses a booking for a time no successful `check_availability` offered. What the model *says* about availability is not checked; one false claim is recorded in the real-model run.)*
+- Confirm name, service, date and time back to the caller before calling `book_appointment`. *(**Prompt only.** Nothing in code checks that the caller agreed. In the real-model run the model cancelled before the caller's "yes", and in the video take it booked before the yes. Listed under "Known limits" and as a v1.1 candidate.)*
 - Escalate to `transfer_to_human` on: medical or legal advice requests, complaints, refunds, anything asked twice without resolution, or explicit "let me speak to someone".
-- If STT confidence is low twice in a row, offer to take a callback number instead of guessing.
-- Keep replies under roughly 2 sentences. Long replies destroy call feel.
+- If STT confidence is low twice in a row, offer to take a callback number instead of guessing. *(**Not built.** Speech confidence is recorded, but nothing reads it and the prompt has no such rule.)*
+- Keep replies under roughly 2 sentences. Long replies destroy call feel. *(Prompt only, not checked; some replies in the real-model run are longer.)*
 - Never state a price unless it exists in the services table.
 
 ## Latency budget
 
-Target under 1.2s from caller stopping to agent starting to speak.
+Target under 1.2s from caller stopping to agent starting to speak. *(**Target, not met and not measured:** no phone line exists, so the time from a caller stopping to the agent speaking has never been measured. The only latency figure is the model request alone, on typed text: p50 2.8 s, p95 5.3 s, which on its own is above the target.)*
 
 - Stream STT; do not wait for the full utterance
 - Start the LLM call on endpoint detection, not on silence timeout
@@ -85,7 +98,7 @@ Target under 1.2s from caller stopping to agent starting to speak.
 
 1. FastAPI skeleton, config, `/health`, Postgres + Alembic, `services` and `business_hours` tables
 2. Calendar core: availability calculation, conflict-safe booking, unit tests. No AI yet.
-3. Tool layer: all six tools callable from tests as plain functions
+3. Tool layer: all six tools callable from tests as plain functions *(a seventh, `find_appointments`, was added later)*
 4. Dialogue layer: text-in/text-out conversation with tool use, transcripts persisted
 5. Browser harness: mic → WS → STT → dialogue → TTS → speaker
 6. Twilio inbound: webhook, media stream, same dialogue path
@@ -111,9 +124,11 @@ Metrics: task success rate, wrong-tool-call rate, hallucinated-availability rate
 
 **Acceptance for v1:** ≥85% task success across scenarios, zero hallucinated availability, correct escalation on all four escalation scenarios.
 
+*Status: **target, not met as written, and not reported as met.** The scripted suite (a scripted model) scores 100%, but the specification's bar was written about a suite driven by a real model. The one real-model run scored 10 of 12 task scenarios (83.3%, below 85%), its pack has two escalation scenarios (`escalate_medical`, `escalate_complaint_refund`) and not four (the scripted suite has four), and its hallucinated-availability counter read zero although one false availability claim was recorded (see the known limit in "The real-model evaluation").*
+
 ## Cost tracking
 
-Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and compute `total_cost_usd`. README must state cost per call and cost per completed booking. That single number is the sales argument.
+Log STT seconds, TTS characters, LLM tokens, telephony minutes per call, and compute `total_cost_usd`. README must state cost per call and cost per completed booking. That single number is the sales argument. *(**Not stated, by design:** no speech or telephony service has been called, so there is no real call to price; see "The specification asks for cost per call" below. The real-model run's total, USD 0.21 for 54 typed-text requests, is stated.)*
 
 ## Notes for the implementer
 
@@ -1092,7 +1107,7 @@ production file changed: `app/config.py` gained `eval_database_url`.
 the right tool with the right arguments, refuse what it should refuse, escalate
 when the scenario says it should, and leave the database in the right state?
 Everything below the model is the real thing — the dialogue layer, the
-executor and its offered-slot guard, all six tools, `CalendarService`, and the
+executor and its offered-slot guard, all seven tools, `CalendarService`, and the
 database's exclusion constraint. Four scenarios are adversarial: they try to
 book an unverified slot, book a slot another caller has just taken, book with
 no name, and book a service that does not exist. Each passes only if the
@@ -1669,6 +1684,21 @@ retried and nothing resumes without a person. The plan, the scoring rules, their
 Raw results and the ledger are in `docs/results/`; the rules for the run and the decision to keep the result as it is are in
 `docs/DECISIONS.md`.
 
+### Known limits
+
+The real weaknesses, in one place. Each is also a candidate for v1.1 (see `docs/DECISIONS.md`).
+
+- **Voice, phone and latency are unproved.** The real run is typed text. No speech service has been called and no call placed. The 1.2 s target is *not met and not measured*.
+- **Confirm-before-acting is prompt-only, and the model broke it.** The executor does not check that the caller agreed. In the real-model run the model cancelled an appointment before the caller's "yes" (`cancel_existing`), and in the video take it booked before the yes. *v1.1:* a check, and a scenario that fails when the model acts before the caller confirms.
+- **What the model says about availability is not checked.** One false claim ("I can move your haircut to 2:00 PM" when 14:00 was taken) was recorded and not failed by the checks; no change was made because the booking guard refused.
+- **The specification's acceptance bar is not met as written** (10 of 12 task scenarios is 83.3%; two escalation scenarios, not four).
+- **Low speech confidence does not trigger a callback offer.** Not built.
+- **No post-call SMS or email confirmation.** Not built.
+- **"Transfer to a human" is a stored callback request.** Nothing can connect a caller to a person.
+- **The two-sentence reply limit is a prompt rule and is not checked.**
+- **No cost per call or per booking** (nothing real to price).
+- **The lookup that protects bookings is not authentication:** anyone who knows a customer's name and number can find that customer's bookings.
+
 ### Deliberately not built yet
 
 No outbound calling, SMS, email or actual transfer. **No billing:** there is no Stripe, no invoice, no subscription,
@@ -1676,8 +1706,9 @@ no quota, no customer account and no payment processing, and none is coming.
 Milestone 8 is accounting — writing down what was used — and nothing else.
 
 **No speech or telephony service has ever been called from this code, and no telephone
-call has ever been placed.** The only real requests are 54 typed-text requests to Anthropic
-(2 smoke, 52 in the one real-model run below). Every test injects a scripted model and scripted
+call has ever been placed.** The only real requests are typed-text requests to Anthropic: 54 for the evaluation
+(2 smoke, 52 in the one real-model run below) and 7 more made recording the demo video on 2026-10-27 (kept in the
+video's own ledger, outside this repository). Every test injects a scripted model and scripted
 speech providers, and the telephony tests simulate the carrier over a real
 socket. The Deepgram, ElevenLabs and Twilio request shapes are
 verified; none of their behaviour is. No accuracy, latency, quality or cost
